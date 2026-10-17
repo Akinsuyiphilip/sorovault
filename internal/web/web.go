@@ -11,6 +11,8 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +31,8 @@ type Server struct {
 	log       *slog.Logger
 	templates *template.Template
 }
+
+const contractsPerPage = 100
 
 // NewServer builds the UI server, parsing its templates up front so a
 // template error is a startup failure rather than a 500 in production.
@@ -61,8 +65,9 @@ func (s *Server) Routes() chi.Router {
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	pageNumber := requestedPage(r)
 
-	page, err := s.list(r, query, network)
+	page, err := s.list(r, query, network, pageNumber)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -73,6 +78,8 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		Network:   network,
 		Contracts: page.Contracts,
 		Total:     page.Total,
+		Page:      pageNumber,
+		PageCount: pageCount(page.Total),
 	})
 }
 
@@ -81,8 +88,9 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 func (s *Server) contractRows(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	network := strings.TrimSpace(r.URL.Query().Get("network"))
+	pageNumber := requestedPage(r)
 
-	page, err := s.list(r, query, network)
+	page, err := s.list(r, query, network, pageNumber)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -93,6 +101,8 @@ func (s *Server) contractRows(w http.ResponseWriter, r *http.Request) {
 		Network:   network,
 		Contracts: page.Contracts,
 		Total:     page.Total,
+		Page:      pageNumber,
+		PageCount: pageCount(page.Total),
 	})
 }
 
@@ -138,10 +148,42 @@ func (s *Server) contract(w http.ResponseWriter, r *http.Request) {
 }
 
 // list runs a listing query for the UI, capped to a single screenful.
-func (s *Server) list(r *http.Request, query, network string) (*store.ContractPage, error) {
-	filter := store.ListFilter{Query: query, Network: network, Limit: 100}
+func (s *Server) list(r *http.Request, query, network string, page int) (*store.ContractPage, error) {
+	filter := store.ListFilter{
+		Query:   query,
+		Network: network,
+		Limit:   contractsPerPage,
+		Offset:  pageOffset(page),
+	}
 	filter.Normalize()
 	return s.reg.Store().ListContracts(r.Context(), filter)
+}
+
+func requestedPage(r *http.Request) int {
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func pageOffset(page int) int {
+	if page <= 1 {
+		return 0
+	}
+
+	maxInt := int(^uint(0) >> 1)
+	if page-1 > maxInt/contractsPerPage {
+		return maxInt
+	}
+	return (page - 1) * contractsPerPage
+}
+
+func pageCount(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return (total + contractsPerPage - 1) / contractsPerPage
 }
 
 type indexData struct {
@@ -149,6 +191,8 @@ type indexData struct {
 	Network   string
 	Contracts []store.Contract
 	Total     int
+	Page      int
+	PageCount int
 }
 
 type contractData struct {
@@ -210,6 +254,24 @@ func funcs() template.FuncMap {
 	return template.FuncMap{
 		"renderType": model.Render,
 		"signature":  func(f model.Function) string { return f.Signature() },
+		"pageURL": func(query, network string, page int) string {
+			values := url.Values{}
+			if query != "" {
+				values.Set("q", query)
+			}
+			if network != "" {
+				values.Set("network", network)
+			}
+			if page > 1 {
+				values.Set("page", strconv.Itoa(page))
+			}
+			if encoded := values.Encode(); encoded != "" {
+				return "/?" + encoded
+			}
+			return "/"
+		},
+		"dec": func(n int) int { return n - 1 },
+		"inc": func(n int) int { return n + 1 },
 		"short": func(s string, n int) string {
 			if len(s) <= n {
 				return s

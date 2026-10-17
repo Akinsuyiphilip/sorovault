@@ -1,7 +1,8 @@
 {{define "contract_rows.html"}}
 <div id="contract-rows">
-{{if .Contracts}}
+{{if .Total}}
   <p class="count">{{.Total}} contract{{if ne .Total 1}}s{{end}}{{if .Query}} matching “{{.Query}}”{{end}}</p>
+  {{if .Contracts}}
   <table class="contracts">
     <thead>
       <tr>
@@ -26,6 +27,18 @@
     {{end}}
     </tbody>
   </table>
+  {{else}}
+  <div class="empty">
+    <p>No contracts on this page.</p>
+  </div>
+  {{end}}
+  {{if gt .PageCount 1}}
+  <nav class="pagination" aria-label="Contract pages">
+    {{if gt .Page 1}}<a href="{{pageURL .Query .Network (dec .Page)}}">Previous</a>{{end}}
+    <span>Page {{.Page}} of {{.PageCount}}</span>
+    {{if lt .Page .PageCount}}<a href="{{pageURL .Query .Network (inc .Page)}}">Next</a>{{end}}
+  </nav>
+  {{end}}
 {{else}}
   <div class="empty">
     {{if .Query}}

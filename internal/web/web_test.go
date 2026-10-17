@@ -2,17 +2,20 @@ package web_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/soroworks/sorovault/internal/model"
 	"github.com/soroworks/sorovault/internal/registry"
 	"github.com/soroworks/sorovault/internal/spec"
 	"github.com/soroworks/sorovault/internal/stellar/stellartest"
@@ -36,7 +39,9 @@ func newHarness(t *testing.T) *harness {
 
 	fake := stellartest.New()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := registry.New(fake, spec.XDRDecoder{}, store.NewMemory(), registry.Options{Logger: log})
+	memory := store.NewMemory()
+	memory.SetClock(func() time.Time { return time.Unix(0, 0) })
+	reg := registry.New(fake, spec.XDRDecoder{}, memory, registry.Options{Logger: log})
 
 	ui, err := web.NewServer(reg, log)
 	require.NoError(t, err)
@@ -113,6 +118,35 @@ func TestIndexListsContracts(t *testing.T) {
 	assert.Contains(t, body, idA)
 	assert.Contains(t, body, "1 contract")
 	assert.Contains(t, body, `id="contract-rows"`)
+}
+
+func TestIndexPagination(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	for i := 0; i < 101; i++ {
+		err := h.reg.Store().Save(context.Background(), store.Contract{
+			ContractID:      fmt.Sprintf("contract-%03d", i),
+			Network:         "testnet",
+			CurrentWasmHash: fmt.Sprintf("hash-%03d", i),
+		}, &model.Interface{ABIVersion: model.ABIVersion})
+		require.NoError(t, err)
+	}
+
+	for _, path := range []string{
+		"/?page=2&q=contract&network=testnet",
+		"/partials/contracts?page=2&q=contract&network=testnet",
+	} {
+		resp, body := h.get(t, path)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, body, "Page 2 of 2")
+		assert.Contains(t, body, "contract-100")
+		assert.NotContains(t, body, "contract-099")
+		// Page 1 is the canonical URL, so its link carries no page parameter;
+		// the template HTML-escapes the query string's ampersands.
+		assert.Contains(t, body, `href="/?network=testnet&amp;q=contract">Previous</a>`)
+		assert.NotContains(t, body, `page=3`, "there is no third page to link to")
+	}
 }
 
 func TestSearch(t *testing.T) {
