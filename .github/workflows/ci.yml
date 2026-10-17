@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Lets the auto-merge bot re-run CI on main after it merges a PR.
+  workflow_dispatch:
 
 permissions:
   contents: read

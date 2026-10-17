@@ -1,0 +1,47 @@
+name: Auto-merge
+
+# Merges pull requests once their CI has passed. The rules live in
+# .github/scripts/automerge.sh, which always runs from the default branch:
+# workflow_run and schedule never use a pull request's copy of this file or
+# the script, so a PR cannot change the rules that judge it.
+
+on:
+  workflow_run:
+    workflows: [CI, Security]
+    types: [completed]
+  # Catches PRs whose last check finished while another merge was running.
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report what would be merged, without merging"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: write
+
+# One merge at a time: each merge moves main and invalidates other PRs' checks.
+concurrency:
+  group: automerge
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - name: Merge passing pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUIRED_CHECKS: "test codegen-typecheck openapi-lint docker govulncheck"
+          PROTECTED_PATHS: ".github/ .goreleaser.yaml Dockerfile internal/codegen/testdata/package.json internal/codegen/testdata/tsconfig.json"
+          CI_WORKFLOW: "ci.yml"
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+        run: bash .github/scripts/automerge.sh
