@@ -200,9 +200,17 @@ Passing CI cannot show that removed tests were safe to remove, so a maintainer w
     exit 0
   fi
 
+  # The squash message is the PR's own title and description. GitHub's
+  # default folds in every intermediate commit message and its trailers
+  # (maintainer merge commits, tool attributions), which then accumulate on
+  # main as co-author credit for commits that were never the author's work.
+  title=$(jq -r '.title' <<<"$row")
+  body=$(gh pr view "$pr" -R "$repo" --json body --jq '.body // ""')
+
   # --match-head-commit refuses the merge if the author pushed after the
   # checks we just read, so we never merge untested code.
-  if gh pr merge "$pr" -R "$repo" --squash --match-head-commit "$sha"; then
+  if gh pr merge "$pr" -R "$repo" --squash --match-head-commit "$sha" \
+      --subject "$title (#$pr)" --body "$body"; then
     log "  MERGED #$pr"
     gh pr edit "$pr" -R "$repo" --remove-label "$stale_label" >/dev/null 2>&1 || true
     # Pushes made with the workflow token do not trigger workflows, so run
