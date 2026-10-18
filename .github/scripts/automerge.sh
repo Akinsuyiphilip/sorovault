@@ -213,6 +213,14 @@ Passing CI cannot show that removed tests were safe to remove, so a maintainer w
       --subject "$title (#$pr)" --body "$body"; then
     log "  MERGED #$pr"
     gh pr edit "$pr" -R "$repo" --remove-label "$stale_label" >/dev/null 2>&1 || true
+    # GitHub does not act on "Closes #N" when the merge is made with the
+    # workflow token, so close the PR's linked issues here.
+    for issue in $(gh pr view "$pr" -R "$repo" --json closingIssuesReferences \
+        --jq '.closingIssuesReferences[].number'); do
+      gh issue close "$issue" -R "$repo" --reason completed \
+        --comment "Resolved by #$pr, which has been merged." >/dev/null 2>&1 \
+        && log "  closed #$issue" || log "  could not close #$issue"
+    done
     # Pushes made with the workflow token do not trigger workflows, so run
     # CI on main explicitly to confirm the merged result.
     if [ -n "${CI_WORKFLOW:-}" ]; then
