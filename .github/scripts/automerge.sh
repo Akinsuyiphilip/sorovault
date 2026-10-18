@@ -23,7 +23,9 @@
 # Environment:
 #   GH_TOKEN          token with contents:write and pull-requests:write
 #   GITHUB_REPOSITORY owner/name (set by Actions)
-#   REQUIRED_CHECKS   space-separated check names that must pass
+#   REQUIRED_CHECKS   space-separated check names that must pass; a name also
+#                     covers its matrix runs, so "test" requires every
+#                     "test (...)" run to pass
 #   PROTECTED_PATHS   space-separated path prefixes a PR must not touch
 #   CI_WORKFLOW       workflow file to run on main after a merge (optional)
 #   ALLOW_BOTS        "true" to also merge bot-authored PRs (default false)
@@ -64,6 +66,12 @@ comment_once() {
   fi
   gh pr comment "$pr" -R "$repo" --body "$tag
 $body" >/dev/null
+}
+
+# matching_checks prints the distinct check names on the current PR that a
+# required name covers: the name itself and its matrix runs "<name> (...)".
+matching_checks() {
+  awk -F'\t' -v n="$1" '$1 == n || index($1, n " (") == 1 { print $1 }' <<<"$checks" | sort -u
 }
 
 hold() {
@@ -107,7 +115,13 @@ for pr in $(jq -r '.[].number' <<<"$prs"); do
   fi
 
   # Files: protected paths and deleted tests both need a human.
-  files=$(gh api "repos/$repo/pulls/$pr/files" --paginate --jq '.[] | "\(.status) \(.filename)"')
+  #
+  # The list comes from comparing main's current head with the PR head, not
+  # from the PR's files endpoint: that endpoint diffs against the base commit
+  # GitHub recorded for the PR, which can lag behind main, so a PR that merged
+  # main would be charged with main's own changes (e.g. to .github/).
+  files=$(gh api "repos/$repo/compare/$main_sha...$sha" \
+    --jq '.files[] | "\(.status) \(.filename)"')
   touched=""
   for prefix in $protected; do
     hit=$(awk -v p="$prefix" 'index($2, p) == 1 { print $2 }' <<<"$files" | head -5)
@@ -136,12 +150,17 @@ Passing CI cannot show that removed tests were safe to remove, so a maintainer w
 
   missing="" failed="" pending=""
   for name in $required; do
-    # A check can run more than once (re-runs); use the latest attempt.
-    line=$(awk -F'\t' -v n="$name" '$1 == n' <<<"$checks" | sort -t$'\t' -k4,4 | tail -1)
-    if [ -z "$line" ]; then missing="$missing $name"; continue; fi
-    IFS=$'\t' read -r _ status conclusion _ <<<"$line"
-    if [ "$status" != completed ]; then pending="$pending $name"
-    elif [ "$conclusion" != success ]; then failed="$failed $name"; fi
+    # A required name also covers a matrix job's runs, which GitHub names
+    # "<job> (<value>)", e.g. "test (ubuntu-latest)". Every such run must pass.
+    runs=$(matching_checks "$name")
+    if [ -z "$runs" ]; then missing="$missing $name"; continue; fi
+    while IFS= read -r run; do
+      # A check can run more than once (re-runs); use the latest attempt.
+      line=$(awk -F'\t' -v n="$run" '$1 == n' <<<"$checks" | sort -t$'\t' -k4,4 | tail -1)
+      IFS=$'\t' read -r _ status conclusion _ <<<"$line"
+      if [ "$status" != completed ]; then pending="$pending $run"
+      elif [ "$conclusion" != success ]; then failed="$failed $run"; fi
+    done <<<"$runs"
   done
   others_bad=$(awk -F'\t' '$2 == "completed" && $3 != "success" && $3 != "neutral" && $3 != "skipped" { print $1 }' <<<"$checks" | sort -u | tr '\n' ' ')
   others_pending=$(awk -F'\t' '$2 != "completed" { print $1 }' <<<"$checks" | sort -u | tr '\n' ' ')
@@ -157,12 +176,18 @@ Passing CI cannot show that removed tests were safe to remove, so a maintainer w
   # moved, or it tested the PR against code that is no longer main.
   stale=""
   for name in $required; do
-    done_at=$(awk -F'\t' -v n="$name" '$1 == n { print $4 }' <<<"$checks" | sort | tail -1)
-    if [[ "$done_at" < "$main_time" ]]; then stale="$stale $name"; fi
+    while IFS= read -r run; do
+      done_at=$(awk -F'\t' -v n="$run" '$1 == n { print $4 }' <<<"$checks" | sort | tail -1)
+      if [[ "$done_at" < "$main_time" ]]; then stale="$stale $run"; fi
+    done < <(matching_checks "$name")
   done
   if [ -n "$stale" ]; then
     hold "$pr" "$stale_label" "stale" "Main has moved since this PR's checks ran, so they no longer show it works with the current code. Please update your branch (the **Update branch** button, or merge or rebase \`main\`) to re-run CI; it will be merged automatically once the new checks pass."
     continue
+  fi
+  # The branch has been updated since it was marked stale; say so.
+  if jq -e --arg l "$stale_label" '[.labels[].name] | index($l)' <<<"$row" >/dev/null; then
+    [ "$dry_run" = true ] || gh pr edit "$pr" -R "$repo" --remove-label "$stale_label" >/dev/null 2>&1 || true
   fi
 
   state=$(gh pr view "$pr" -R "$repo" --json mergeable,mergeStateStatus --jq '"\(.mergeable) \(.mergeStateStatus)"')
