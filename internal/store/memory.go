@@ -191,6 +191,27 @@ func (m *Memory) GetContract(ctx context.Context, network, contractID string) (*
 	return &c, nil
 }
 
+// ListNetworks returns the distinct networks represented in the registry.
+func (m *Memory) ListNetworks(ctx context.Context) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	seen := make(map[string]struct{})
+	for _, contract := range m.contracts {
+		seen[contract.Network] = struct{}{}
+	}
+	networks := make([]string, 0, len(seen))
+	for network := range seen {
+		networks = append(networks, network)
+	}
+	sort.Strings(networks)
+	return networks, nil
+}
+
 // ListContracts returns a filtered, paged listing ordered newest-refreshed
 // first.
 func (m *Memory) ListContracts(ctx context.Context, f ListFilter) (*ContractPage, error) {

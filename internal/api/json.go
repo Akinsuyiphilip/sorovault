@@ -48,7 +48,7 @@ type contractResponse struct {
 	// Current is false when an older version was requested explicitly.
 	Current bool `json:"current"`
 
-	Interface *model.Interface `json:"interface"`
+	Interface json.RawMessage `json:"interface"`
 }
 
 type functionResponse struct {

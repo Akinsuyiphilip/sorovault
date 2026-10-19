@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -40,16 +41,12 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
-	return newHarnessWith(t, registry.Options{})
+	return newHarnessWithStore(t, stellartest.New(), store.NewMemory())
 }
 
-// newHarnessWith is newHarness with the registry's own options, so a test
-// can give it a concurrency limit.
-func newHarnessWith(t *testing.T, opts registry.Options) *harness {
+func newHarnessWithStore(t *testing.T, fake *stellartest.Fake, db store.Store) *harness {
 	t.Helper()
 
-	fake := stellartest.New()
-	db := store.NewMemory()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if opts.Logger == nil {
 		opts.Logger = log
@@ -64,6 +61,25 @@ func newHarnessWith(t *testing.T, opts registry.Options) *harness {
 	t.Cleanup(srv.Close)
 
 	return &harness{server: srv, fake: fake, store: db}
+}
+
+type countingStore struct {
+	store.Store
+	mu        sync.Mutex
+	specReads int
+}
+
+func (s *countingStore) GetSpec(ctx context.Context, network, contractID, wasmHash string) (*store.Spec, error) {
+	s.mu.Lock()
+	s.specReads++
+	s.mu.Unlock()
+	return s.Store.GetSpec(ctx, network, contractID, wasmHash)
+}
+
+func (s *countingStore) reads() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.specReads
 }
 
 func (h *harness) do(t *testing.T, method, path, body string) (*http.Response, []byte) {
@@ -97,7 +113,7 @@ func (h *harness) decode(t *testing.T, raw []byte) map[string]any {
 	return out
 }
 
-func moduleWith(t *testing.T, fnName string) []byte {
+func moduleWith(t testing.TB, fnName string) []byte {
 	t.Helper()
 
 	entry := xdr.ScSpecEntry{
@@ -317,6 +333,38 @@ func TestGetContract(t *testing.T) {
 	fn := iface["functions"].([]any)[0].(map[string]any)
 	assert.Equal(t, "balance", fn["name"])
 	assert.Equal(t, "u32", fn["outputs"].([]any)[0].(map[string]any)["display"])
+}
+
+func TestGetContractCachesInterfaceAndTracksUpgrades(t *testing.T) {
+	t.Parallel()
+
+	fake := stellartest.New()
+	db := &countingStore{Store: store.NewMemory()}
+	h := newHarnessWithStore(t, fake, db)
+	fake.Deploy(idA, moduleWith(t, "v1"))
+
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idA+`"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(raw))
+
+	for range 2 {
+		resp, raw = h.do(t, http.MethodGet, "/api/contracts/"+idA, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+		functions := h.decode(t, raw)["interface"].(map[string]any)["functions"].([]any)
+		assert.Equal(t, "v1", functions[0].(map[string]any)["name"])
+	}
+	assert.Equal(t, 1, db.reads(), "a cache hit must skip loading and decoding the stored spec")
+
+	fake.Upgrade(idA, moduleWith(t, "v2"))
+	resp, raw = h.do(t, http.MethodPost, "/api/contracts/"+idA+"/refresh", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	resp, raw = h.do(t, http.MethodGet, "/api/contracts/"+idA, "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+	got := h.decode(t, raw)
+	functions := got["interface"].(map[string]any)["functions"].([]any)
+	assert.Equal(t, "v2", functions[0].(map[string]any)["name"])
+	assert.True(t, got["current"].(bool))
+	assert.Equal(t, 2, db.reads(), "a new WASM hash must load its own interface")
 }
 
 func TestGetContractNotFound(t *testing.T) {

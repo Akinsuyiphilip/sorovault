@@ -121,6 +121,41 @@ func TestIndexListsContracts(t *testing.T) {
 	assert.Contains(t, body, `id="contract-rows"`)
 }
 
+func TestIndexNetworkSelectorFiltersResults(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	iface := &model.Interface{
+		ABIVersion: model.ABIVersion,
+		Functions:  []model.Function{},
+		Types: model.Types{
+			Structs: []model.Struct{}, Unions: []model.Union{},
+			Enums: []model.Enum{}, ErrorEnums: []model.ErrorEnum{},
+		},
+		Events: []model.Event{},
+	}
+	for _, c := range []store.Contract{
+		{ContractID: idA, Network: "testnet", CurrentWasmHash: "hash-testnet"},
+		{ContractID: idB, Network: "public", CurrentWasmHash: "hash-public"},
+	} {
+		require.NoError(t, h.reg.Store().Save(context.Background(), c, iface))
+	}
+
+	_, body := h.get(t, "/")
+	assert.Contains(t, body, `<option value="public">public</option>`)
+	assert.Contains(t, body, `<option value="testnet">testnet</option>`)
+	assert.Contains(t, body, `<option value="" selected>All</option>`)
+
+	_, body = h.get(t, "/?network=public")
+	assert.Contains(t, body, idB)
+	assert.NotContains(t, body, idA)
+	assert.Contains(t, body, `<option value="public" selected>public</option>`)
+
+	_, body = h.get(t, "/partials/contracts?network=public")
+	assert.Contains(t, body, idB)
+	assert.NotContains(t, body, idA)
+}
+
 func TestIndexPagination(t *testing.T) {
 	t.Parallel()
 
@@ -206,9 +241,13 @@ func TestContractPage(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
 	assert.Contains(t, body, idA)
-	assert.Contains(t, body, "fn has_voted(nullifier: BytesN&lt;32&gt;) -&gt; bool")
-	assert.Contains(t, body, "struct VoteParams")
-	assert.Contains(t, body, "error Error")
+	assert.Contains(t, body, `<span class="sig-function">has_voted</span>`)
+	assert.Contains(t, body, `<span class="sig-parameter">nullifier</span>`)
+	assert.Contains(t, body, `<span class="type-constructor">BytesN</span>`)
+	assert.Contains(t, body, `<span class="type-parameter">32</span>`)
+	assert.Contains(t, body, `<a class="type-reference" href="#type-VoteParams">VoteParams</a>`)
+	assert.Contains(t, body, `<span class="type-definition" id="type-VoteParams">VoteParams</span>`)
+	assert.Contains(t, body, `<span class="type-keyword">error</span> <span class="type-definition" id="type-Error">Error</span>`)
 	assert.Contains(t, body, "Voted", "the event should be listed")
 	assert.Contains(t, body, "rssdkver", "build metadata should be shown")
 	assert.Contains(t, body, `href="https://github.com/soroworks/sorovault"`)

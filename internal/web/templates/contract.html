@@ -39,7 +39,7 @@
   {{if .Interface.Functions}}
     {{range .Interface.Functions}}
     <article class="fn">
-      <h3 class="mono">{{signature .}}</h3>
+      <h3 class="mono signature">{{range signatureParts . $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</h3>
       {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
       {{if .Inputs}}
       <table class="params">
@@ -47,7 +47,7 @@
         {{range .Inputs}}
           <tr>
             <td class="mono pname">{{.Name}}</td>
-            <td class="mono ptype">{{.Type.Display}}</td>
+            <td class="mono ptype">{{range typeParts .Type $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</td>
             <td class="dim">{{.Doc}}</td>
           </tr>
         {{end}}
@@ -55,7 +55,7 @@
       </table>
       {{end}}
       <p class="returns">
-        returns <code>{{if .Outputs}}{{(index .Outputs 0).Display}}{{else}}(){{end}}</code>
+        returns <code>{{if .Outputs}}{{range typeParts (index .Outputs 0) $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}{{else}}(){{end}}</code>
         <a class="jsonlink"
            href="/api/contracts/{{$.Contract.ContractID}}/functions/{{.Name}}?network={{$.Contract.Network}}&amp;wasm_hash={{$.Spec.WasmHash}}">JSON</a>
       </p>
@@ -72,23 +72,23 @@
 
   {{range .Interface.Types.Structs}}
   <article class="udt">
-    <h3 class="mono">struct {{.Name}}{{if .IsTuple}} <span class="dim">(tuple)</span>{{end}}</h3>
+    <h3 class="mono"><span class="type-keyword">struct</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span>{{if .IsTuple}} <span class="dim">(tuple)</span>{{end}}</h3>
     {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
     <table class="params"><tbody>
-      {{range .Fields}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{.Type.Display}}</td></tr>{{end}}
+      {{range .Fields}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{range typeParts .Type $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</td></tr>{{end}}
     </tbody></table>
   </article>
   {{end}}
 
   {{range .Interface.Types.Unions}}
   <article class="udt">
-    <h3 class="mono">enum {{.Name}}</h3>
+    <h3 class="mono"><span class="type-keyword">enum</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span></h3>
     {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}
       <tr>
         <td class="mono pname">{{.Name}}</td>
-        <td class="mono ptype">{{range $i, $t := .Values}}{{if $i}}, {{end}}{{$t.Display}}{{end}}</td>
+        <td class="mono ptype">{{range $i, $t := .Values}}{{if $i}}<span class="type-punctuation">, </span>{{end}}{{range typeParts $t $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}{{end}}</td>
       </tr>
       {{end}}
     </tbody></table>
@@ -97,7 +97,7 @@
 
   {{range .Interface.Types.Enums}}
   <article class="udt">
-    <h3 class="mono">enum {{.Name}} <span class="dim">(u32)</span></h3>
+    <h3 class="mono"><span class="type-keyword">enum</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span> <span class="dim">(u32)</span></h3>
     {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{.Value}}</td></tr>{{end}}
@@ -107,7 +107,7 @@
 
   {{range .Interface.Types.ErrorEnums}}
   <article class="udt">
-    <h3 class="mono">error {{.Name}}</h3>
+    <h3 class="mono"><span class="type-keyword">error</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span></h3>
     {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{.Value}}</td></tr>{{end}}
@@ -128,7 +128,7 @@
       {{range .Params}}
       <tr>
         <td class="mono pname">{{.Name}}</td>
-        <td class="mono ptype">{{.Type.Display}}</td>
+        <td class="mono ptype">{{range typeParts .Type $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</td>
         <td class="dim">{{.Location}}</td>
       </tr>
       {{end}}

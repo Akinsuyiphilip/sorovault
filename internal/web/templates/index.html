@@ -10,14 +10,20 @@
      upgrades it to swap the table as the user types. */}}
 <form class="search" action="/" method="get"
       hx-get="/partials/contracts"
-      hx-trigger="input changed delay:250ms from:#q, search from:#q, submit"
+      hx-trigger="input changed delay:250ms from:#q, search from:#q, change from:#network, submit"
       hx-target="#contract-rows"
       hx-select="#contract-rows"
       hx-swap="outerHTML"
       hx-push-url="true">
   <input id="q" name="q" type="search" value="{{.Query}}"
          placeholder="Search contract ID, name, function or type…" autocomplete="off" autofocus>
-  {{if .Network}}<input type="hidden" name="network" value="{{.Network}}">{{end}}
+  <label class="network-filter" for="network">
+    <span>Network</span>
+    <select id="network" name="network">
+      <option value=""{{if not .Network}} selected{{end}}>All</option>
+      {{range .Networks}}<option value="{{.}}"{{if eq . $.Network}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+  </label>
   <button type="submit">Search</button>
 </form>
 

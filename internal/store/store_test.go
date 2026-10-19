@@ -251,6 +251,19 @@ func runStoreSuite(t *testing.T, newStore factory) {
 		assert.Equal(t, 1, page.Total)
 	})
 
+	t.Run("network listing is distinct and sorted", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("f")))
+		require.NoError(t, s.Save(ctx, contract(idB, "public", "h2"), iface("f")))
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h3"), iface("f")))
+
+		networks, err := s.ListNetworks(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"public", "testnet"}, networks)
+	})
+
 	t.Run("listing filters and pages", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()

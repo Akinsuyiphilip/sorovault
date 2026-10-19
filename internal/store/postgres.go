@@ -253,6 +253,29 @@ func (p *Postgres) ListContracts(ctx context.Context, f ListFilter) (*ContractPa
 	return page, nil
 }
 
+// ListNetworks returns the distinct networks represented in the registry.
+func (p *Postgres) ListNetworks(ctx context.Context) ([]string, error) {
+	const q = `SELECT DISTINCT network FROM contracts ORDER BY network`
+	rows, err := p.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing networks: %w", err)
+	}
+	defer rows.Close()
+
+	networks := []string{}
+	for rows.Next() {
+		var network string
+		if err := rows.Scan(&network); err != nil {
+			return nil, fmt.Errorf("store: scanning network: %w", err)
+		}
+		networks = append(networks, network)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: listing networks: %w", err)
+	}
+	return networks, nil
+}
+
 func (p *Postgres) countContracts(ctx context.Context, f ListFilter) (int, error) {
 	// Must mirror ListContracts' predicate, or a page past the end would
 	// report a different total from the pages before it.

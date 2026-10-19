@@ -164,6 +164,10 @@ type Store interface {
 	// ListContracts returns a filtered, paged listing.
 	ListContracts(ctx context.Context, f ListFilter) (*ContractPage, error)
 
+	// ListNetworks returns the distinct networks represented in the registry,
+	// in ascending order.
+	ListNetworks(ctx context.Context) ([]string, error)
+
 	// GetSpec returns a contract's decoded interface. An empty wasmHash
 	// selects whichever version the contract currently runs.
 	GetSpec(ctx context.Context, network, contractID, wasmHash string) (*Spec, error)

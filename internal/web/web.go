@@ -96,10 +96,16 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	networks, err := s.reg.Store().ListNetworks(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
 
 	s.render(w, r, "index.html", indexData{
 		Query:     query,
 		Network:   network,
+		Networks:  networks,
 		Contracts: page.Contracts,
 		Total:     page.Total,
 		Page:      pageNumber,
@@ -213,6 +219,7 @@ func pageCount(total int) int {
 type indexData struct {
 	Query     string
 	Network   string
+	Networks  []string
 	Contracts []store.Contract
 	Total     int
 	Page      int
@@ -269,6 +276,12 @@ type errorData struct {
 	Message string
 }
 
+type renderPart struct {
+	Text  string
+	Class string
+	Href  string
+}
+
 func isNotFound(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "not found")
 }
@@ -276,8 +289,10 @@ func isNotFound(err error) bool {
 // funcs are the helpers templates use to render the ABI model.
 func funcs() template.FuncMap {
 	return template.FuncMap{
-		"renderType": model.Render,
-		"signature":  func(f model.Function) string { return f.Signature() },
+		"renderType":     model.Render,
+		"signatureParts": signatureParts,
+		"typeParts":      typeParts,
+		"typeID":         typeID,
 		"pageURL": func(query, network string, page int) string {
 			values := url.Values{}
 			if query != "" {
@@ -306,4 +321,100 @@ func funcs() template.FuncMap {
 			return len(t.Structs)+len(t.Unions)+len(t.Enums)+len(t.ErrorEnums) > 0
 		},
 	}
+}
+
+func typeID(name string) string { return "type-" + name }
+
+func signatureParts(fn model.Function, iface *model.Interface) []renderPart {
+	parts := []renderPart{{Text: "fn ", Class: "sig-keyword"}, {Text: fn.Name, Class: "sig-function"}, {Text: "(", Class: "sig-punctuation"}}
+	for i, input := range fn.Inputs {
+		if i > 0 {
+			parts = append(parts, renderPart{Text: ", ", Class: "sig-punctuation"})
+		}
+		parts = append(parts,
+			renderPart{Text: input.Name, Class: "sig-parameter"},
+			renderPart{Text: ": ", Class: "sig-punctuation"},
+		)
+		parts = append(parts, typeParts(input.Type, iface)...)
+	}
+	parts = append(parts, renderPart{Text: ")", Class: "sig-punctuation"})
+	if len(fn.Outputs) > 0 {
+		parts = append(parts, renderPart{Text: " -> ", Class: "sig-punctuation"})
+		parts = append(parts, typeParts(fn.Outputs[0], iface)...)
+	}
+	return parts
+}
+
+func typeParts(value model.Type, iface *model.Interface) []renderPart {
+	part := func(text, class string) []renderPart {
+		return []renderPart{{Text: text, Class: class}}
+	}
+	child := func(child *model.Type) []renderPart {
+		if child == nil {
+			return part("?", "type-name")
+		}
+		return typeParts(*child, iface)
+	}
+	wrap := func(name string, inner ...[]renderPart) []renderPart {
+		parts := []renderPart{{Text: name, Class: "type-constructor"}, {Text: "<", Class: "type-punctuation"}}
+		for i, group := range inner {
+			if i > 0 {
+				parts = append(parts, renderPart{Text: ", ", Class: "type-punctuation"})
+			}
+			parts = append(parts, group...)
+		}
+		return append(parts, renderPart{Text: ">", Class: "type-punctuation"})
+	}
+
+	switch value.Kind {
+	case model.KindOption:
+		return wrap("Option", child(value.Inner))
+	case model.KindVec:
+		return wrap("Vec", child(value.Element))
+	case model.KindMap:
+		return wrap("Map", child(value.Key), child(value.Value))
+	case model.KindResult:
+		return wrap("Result", child(value.Ok), child(value.Error))
+	case model.KindBytesN:
+		return wrap("BytesN", part(strconv.FormatUint(uint64(value.N), 10), "type-parameter"))
+	case model.KindTuple:
+		parts := []renderPart{{Text: "(", Class: "type-punctuation"}}
+		for i, element := range value.Elements {
+			if i > 0 {
+				parts = append(parts, renderPart{Text: ", ", Class: "type-punctuation"})
+			}
+			parts = append(parts, typeParts(element, iface)...)
+		}
+		return append(parts, renderPart{Text: ")", Class: "type-punctuation"})
+	case model.KindUDT:
+		name := value.Name
+		for _, definition := range definedTypes(iface) {
+			if definition == name {
+				return []renderPart{{Text: name, Class: "type-reference", Href: "#" + typeID(name)}}
+			}
+		}
+		return part(name, "type-reference")
+	default:
+		return part(model.Render(value), "type-name")
+	}
+}
+
+func definedTypes(iface *model.Interface) []string {
+	if iface == nil {
+		return nil
+	}
+	names := make([]string, 0, len(iface.Types.Structs)+len(iface.Types.Unions)+len(iface.Types.Enums)+len(iface.Types.ErrorEnums))
+	for _, value := range iface.Types.Structs {
+		names = append(names, value.Name)
+	}
+	for _, value := range iface.Types.Unions {
+		names = append(names, value.Name)
+	}
+	for _, value := range iface.Types.Enums {
+		names = append(names, value.Name)
+	}
+	for _, value := range iface.Types.ErrorEnums {
+		names = append(names, value.Name)
+	}
+	return names
 }

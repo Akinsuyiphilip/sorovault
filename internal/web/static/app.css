@@ -109,6 +109,36 @@ h3 { font-size: .93rem; margin: 0 0 .4rem; font-weight: 600; }
   outline-offset: -1px;
 }
 
+.network-filter {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  color: var(--dim);
+  font-size: .8rem;
+  white-space: nowrap;
+}
+
+.network-filter select {
+  min-width: 7rem;
+  padding: .55rem .7rem;
+  font: inherit;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.network-filter select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+@media (max-width: 36rem) {
+  .search { flex-wrap: wrap; }
+  .search input { flex-basis: 100%; }
+  .network-filter { flex: 1; }
+}
+
 .search button {
   padding: .55rem 1rem;
   font: inherit;
@@ -160,6 +190,22 @@ table { width: 100%; border-collapse: collapse; }
 }
 
 .fn h3 { color: var(--ink); word-break: break-word; }
+
+.signature { overflow-wrap: anywhere; }
+.sig-keyword, .type-keyword { color: var(--dim); font-weight: 500; }
+.sig-function { color: var(--ink); font-weight: 700; }
+.sig-parameter { color: #9a4f18; }
+.type-constructor { color: #a33f52; font-weight: 600; }
+.type-name, .type-parameter { color: var(--accent); }
+.type-reference, .type-definition { color: #246d8a; font-weight: 600; }
+.type-reference { text-decoration-thickness: 1px; text-underline-offset: 2px; }
+.type-punctuation { color: var(--dim); }
+
+@media (prefers-color-scheme: dark) {
+  .sig-parameter { color: #f1ad72; }
+  .type-constructor { color: #f095a4; }
+  .type-reference, .type-definition { color: #78c6e4; }
+}
 
 .doc {
   color: var(--dim);
