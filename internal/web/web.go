@@ -52,6 +52,7 @@ func NewServer(reg *registry.Registry, log *slog.Logger) (*Server, error) {
 // Routes returns the UI's routes, to be mounted at the server root.
 func (s *Server) Routes() chi.Router {
 	r := chi.NewRouter()
+	r.Use(securityHeaders)
 
 	r.Get("/", s.index)
 	r.Get("/contracts/{id}", s.contract)
@@ -59,6 +60,29 @@ func (s *Server) Routes() chi.Router {
 	r.Handle("/static/*", http.FileServer(http.FS(assets)))
 
 	return r
+}
+
+// securityHeaders hardens every UI response.
+//
+// The browse UI renders strings that come from untrusted contracts. Go's
+// html/template already escapes them, but a Content-Security-Policy is the
+// second line of defence: if an escape ever fails, no script or style from a
+// contract's text can run. Everything the UI needs is vendored under /static,
+// so no other origin is allowed and neither 'unsafe-inline' nor 'unsafe-eval'
+// is needed — htmx is a plain /static script and its default indicator
+// stylesheet is switched off in layout.html so it injects no inline style.
+func securityHeaders(next http.Handler) http.Handler {
+	const policy = "default-src 'self'; base-uri 'none'; object-src 'none'; " +
+		"frame-ancestors 'none'; form-action 'self'"
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", policy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		// Legacy companion to frame-ancestors, for browsers that predate CSP.
+		h.Set("X-Frame-Options", "DENY")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // index renders the searchable contract list.

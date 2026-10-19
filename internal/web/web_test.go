@@ -282,3 +282,60 @@ func TestNoExternalResources(t *testing.T) {
 		assert.NotContains(t, body, "cdn.jsdelivr.net", "%s must not load scripts from a CDN", path)
 	}
 }
+
+// TestSecurityHeaders checks the hardening every UI response carries: a strict
+// Content-Security-Policy, nosniff, and a frame-ancestors/X-Frame-Options
+// policy. These apply to the fragments and static assets too, not just pages.
+func TestSecurityHeaders(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	for _, path := range []string{"/", "/contracts/" + idA, "/partials/contracts", "/static/app.css"} {
+		resp, _ := h.get(t, path)
+
+		csp := resp.Header.Get("Content-Security-Policy")
+		require.NotEmpty(t, csp, "%s must carry a CSP", path)
+		assert.Contains(t, csp, "default-src 'self'", path)
+		assert.Contains(t, csp, "frame-ancestors 'none'", path)
+		// The UI vendors its only script and stylesheet, so nothing has a
+		// reason to relax the policy to inline or eval.
+		assert.NotContains(t, csp, "unsafe-inline", path)
+		assert.NotContains(t, csp, "unsafe-eval", path)
+
+		assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"), path)
+		assert.Equal(t, "DENY", resp.Header.Get("X-Frame-Options"), path)
+	}
+}
+
+// TestNoInlineScriptOrStyle keeps the strict CSP honest. The policy allows no
+// 'unsafe-inline', so an inline script, style or event handler added later
+// would be silently blocked at runtime; this fails the build instead.
+func TestNoInlineScriptOrStyle(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	for _, path := range []string{"/", "/contracts/" + idA, "/partials/contracts"} {
+		_, body := h.get(t, path)
+		assert.NotContains(t, body, "<style", "%s must not embed a stylesheet", path)
+		assert.NotContains(t, body, " style=", "%s must not use a style attribute", path)
+		assert.NotContains(t, body, "<script>", "%s must not embed inline script", path)
+		assert.NotContains(t, body, "onclick=", "%s must not use inline event handlers", path)
+	}
+}
+
+// TestHtmxInjectsNoInlineStyle guards the one inline style htmx adds on its
+// own: its default loading-indicator stylesheet. The UI disables it through a
+// meta htmx-config, because an injected <style> would violate the CSP.
+func TestHtmxInjectsNoInlineStyle(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	_, body := h.get(t, "/")
+	assert.Contains(t, body, `name="htmx-config"`)
+	assert.Contains(t, body, "includeIndicatorStyles")
+}
