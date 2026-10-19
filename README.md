@@ -131,11 +131,11 @@ $ go run ./cmd/sorovault serve
 
 ## Configuration
 
-All configuration is environment variables. Only `DATABASE_URL` is required.
+All configuration is environment variables. Only `DATABASE_URL` (or the path in `DATABASE_URL_FILE`, read from the filesystem) is required.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | — | Postgres connection string. **Required.** |
+| `DATABASE_URL` | — | Postgres connection string. **Required** (or set `DATABASE_URL_FILE` to read it from a file). |
 | `RPC_URL` | `https://soroban-testnet.stellar.org` | Stellar RPC endpoint |
 | `NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` | the network you expect `RPC_URL` to serve |
 | `HTTP_ADDR` | `:8080` | listen address |

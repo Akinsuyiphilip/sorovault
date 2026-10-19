@@ -49,13 +49,18 @@ const MinRefreshInterval = time.Minute
 
 // Load reads configuration from the process environment.
 //
-// DATABASE_URL is the only variable with no usable default, so it is the
-// only one whose absence is an error.
+// The database connection string is the only setting with no usable default
+// (see DatabaseURLFromEnv), so it is the only one whose absence is an error.
 func Load() (*Config, error) {
+	databaseURL, err := DatabaseURLFromEnv()
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
 		RPCURL:            envOr("RPC_URL", DefaultRPCURL),
 		NetworkPassphrase: envOr("NETWORK_PASSPHRASE", DefaultNetworkPassphrase),
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		DatabaseURL:       databaseURL,
 		HTTPAddr:          envOr("HTTP_ADDR", DefaultHTTPAddr),
 		RPCTimeout:        DefaultRPCTimeout,
 	}
@@ -90,13 +95,46 @@ func Load() (*Config, error) {
 	}
 
 	if cfg.DatabaseURL == "" {
-		return nil, errors.New("config: DATABASE_URL is required")
+		return nil, errors.New("config: DATABASE_URL or DATABASE_URL_FILE is required")
 	}
 	if cfg.RPCURL == "" {
 		return nil, errors.New("config: RPC_URL must not be empty")
 	}
 
 	return cfg, nil
+}
+
+// DatabaseURLFromEnv resolves the Postgres connection string.
+//
+// It is DATABASE_URL, or the contents of the file named by DATABASE_URL_FILE
+// when that is set instead. Docker secrets, Swarm secrets and Kubernetes
+// Secret volumes hand credentials over as files; a value that never enters the
+// environment cannot leak through `docker inspect`, an error report or the
+// environment of every child process the way an exported variable can.
+//
+// Setting both is a configuration mistake rather than a preference, so it is
+// an error instead of a silent pick.
+func DatabaseURLFromEnv() (string, error) {
+	inline := os.Getenv("DATABASE_URL")
+	path := os.Getenv("DATABASE_URL_FILE")
+
+	if inline != "" && path != "" {
+		return "", errors.New("config: set either DATABASE_URL or DATABASE_URL_FILE, not both")
+	}
+	if path == "" {
+		return inline, nil
+	}
+
+	// The read error names the path; the contents are a credential, so they
+	// must not reach the error, a log line or a stack trace.
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("config: DATABASE_URL_FILE: %w", err)
+	}
+	// Secret files usually end in a newline (echo adds one, and Kubernetes
+	// keeps what it was given). A connection string with one on the end is
+	// not the string the driver was given.
+	return strings.TrimRight(string(b), "\r\n"), nil
 }
 
 // NewLogger builds the structured logger the rest of the process writes to.

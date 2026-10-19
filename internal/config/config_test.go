@@ -2,6 +2,8 @@ package config_test
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -19,7 +21,7 @@ func setEnv(t *testing.T, vars map[string]string) {
 	t.Helper()
 
 	for _, key := range []string{
-		"RPC_URL", "NETWORK_PASSPHRASE", "DATABASE_URL",
+		"RPC_URL", "NETWORK_PASSPHRASE", "DATABASE_URL", "DATABASE_URL_FILE",
 		"HTTP_ADDR", "LOG_LEVEL", "RPC_TIMEOUT", "REFRESH_INTERVAL",
 	} {
 		if v, ok := vars[key]; ok {
@@ -141,6 +143,11 @@ func TestInvalidValues(t *testing.T) {
 			vars:    map[string]string{"DATABASE_URL": testDatabaseURL, "REFRESH_INTERVAL": "-1h"},
 			wantErr: "at least",
 		},
+		{
+			name:    "both database url sources set",
+			vars:    map[string]string{"DATABASE_URL": testDatabaseURL, "DATABASE_URL_FILE": "/tmp/secret"},
+			wantErr: "set either DATABASE_URL or DATABASE_URL_FILE",
+		},
 	}
 
 	for _, tt := range tests {
@@ -152,4 +159,47 @@ func TestInvalidValues(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
+}
+
+func TestLoadDatabaseURLFromFile(t *testing.T) {
+	t.Run("reads contents", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "dburl")
+		require.NoError(t, os.WriteFile(f, []byte(testDatabaseURL), 0o600))
+		setEnv(t, map[string]string{"DATABASE_URL_FILE": f})
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Equal(t, testDatabaseURL, cfg.DatabaseURL)
+	})
+
+	t.Run("trims trailing newline", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "dburl")
+		require.NoError(t, os.WriteFile(f, []byte(testDatabaseURL+"\n"), 0o600))
+		setEnv(t, map[string]string{"DATABASE_URL_FILE": f})
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Equal(t, testDatabaseURL, cfg.DatabaseURL)
+	})
+
+	t.Run("trims carriage return", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "dburl")
+		require.NoError(t, os.WriteFile(f, []byte(testDatabaseURL+"\r\n"), 0o600))
+		setEnv(t, map[string]string{"DATABASE_URL_FILE": f})
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Equal(t, testDatabaseURL, cfg.DatabaseURL)
+	})
+
+	t.Run("unreadable file names path", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "missing")
+		setEnv(t, map[string]string{"DATABASE_URL_FILE": f})
+
+		_, err := config.Load()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "DATABASE_URL_FILE")
+		assert.NotContains(t, err.Error(), testDatabaseURL)
+		assert.Contains(t, err.Error(), f)
+	})
 }

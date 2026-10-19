@@ -87,9 +87,12 @@ func (a *app) fetchContext(ctx context.Context) (context.Context, context.Cancel
 // requireDatabaseURL produces the same guidance as config.Load for commands
 // that need only the database and skip the rest of the wiring.
 func requireDatabaseURL() (string, error) {
-	url := os.Getenv("DATABASE_URL")
+	url, err := config.DatabaseURLFromEnv()
+	if err != nil {
+		return "", err
+	}
 	if url == "" {
-		return "", fmt.Errorf("DATABASE_URL is required")
+		return "", fmt.Errorf("DATABASE_URL or DATABASE_URL_FILE is required")
 	}
 	return url, nil
 }

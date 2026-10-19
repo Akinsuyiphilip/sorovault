@@ -41,7 +41,7 @@ Configuration is read from the environment:
 
   RPC_URL             Stellar RPC endpoint      (default testnet)
   NETWORK_PASSPHRASE  expected network          (default testnet)
-  DATABASE_URL        Postgres connection URL   (required)
+  DATABASE_URL        Postgres connection URL   (required; or DATABASE_URL_FILE)
   HTTP_ADDR           listen address for serve  (default :8080)
   LOG_LEVEL           debug|info|warn|error     (default info)`,
 		Version:       version,
