@@ -40,11 +40,22 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
+	return newHarnessWith(t, registry.Options{})
+}
+
+// newHarnessWith is newHarness with the registry's own options, so a test
+// can give it a concurrency limit.
+func newHarnessWith(t *testing.T, opts registry.Options) *harness {
+	t.Helper()
+
 	fake := stellartest.New()
 	db := store.NewMemory()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if opts.Logger == nil {
+		opts.Logger = log
+	}
 
-	reg := registry.New(fake, spec.XDRDecoder{}, db, registry.Options{Logger: log})
+	reg := registry.New(fake, spec.XDRDecoder{}, db, opts)
 
 	r := chi.NewRouter()
 	r.Mount("/api", api.NewServer(reg, log).Routes())

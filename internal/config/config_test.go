@@ -23,6 +23,7 @@ func setEnv(t *testing.T, vars map[string]string) {
 	for _, key := range []string{
 		"RPC_URL", "NETWORK_PASSPHRASE", "DATABASE_URL", "DATABASE_URL_FILE",
 		"HTTP_ADDR", "LOG_LEVEL", "RPC_TIMEOUT", "REFRESH_INTERVAL",
+		"MAX_CONCURRENT_REGISTRATIONS",
 	} {
 		if v, ok := vars[key]; ok {
 			t.Setenv(key, v)
@@ -45,6 +46,8 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, slog.LevelInfo, cfg.LogLevel)
 	assert.Equal(t, config.DefaultRPCTimeout, cfg.RPCTimeout)
 	assert.Zero(t, cfg.RefreshInterval, "automatic refresh is opt-in")
+	assert.Zero(t, cfg.MaxConcurrentRegistrations,
+		"the concurrency limit is left to the registry unless it is configured")
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -67,6 +70,83 @@ func TestLoadOverrides(t *testing.T) {
 	assert.Equal(t, "127.0.0.1:9999", cfg.HTTPAddr)
 	assert.Equal(t, slog.LevelDebug, cfg.LogLevel)
 	assert.Equal(t, 90*time.Second, cfg.RPCTimeout)
+}
+
+func TestMaxConcurrentRegistrations(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr string
+	}{
+		{
+			name: "unset leaves the registry's own default alone",
+		},
+		{
+			name:  "a limit",
+			value: "8",
+			want:  8,
+		},
+		{
+			name:  "the smallest limit",
+			value: "1",
+			want:  1,
+		},
+		{
+			name:  "the largest limit",
+			value: "1000",
+			want:  1000,
+		},
+		{
+			name:  "surrounding space is ignored",
+			value: " 12 ",
+			want:  12,
+		},
+		{
+			name:    "zero is not a limit",
+			value:   "0",
+			wantErr: "must be between",
+		},
+		{
+			name:    "a negative limit",
+			value:   "-1",
+			wantErr: "must be between",
+		},
+		{
+			name:    "above the largest limit",
+			value:   "1001",
+			wantErr: "must be between",
+		},
+		{
+			name:    "not a number",
+			value:   "lots",
+			wantErr: "MAX_CONCURRENT_REGISTRATIONS",
+		},
+		{
+			name:    "not a whole number",
+			value:   "2.5",
+			wantErr: "MAX_CONCURRENT_REGISTRATIONS",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vars := map[string]string{"DATABASE_URL": testDatabaseURL}
+			if tt.value != "" {
+				vars["MAX_CONCURRENT_REGISTRATIONS"] = tt.value
+			}
+			setEnv(t, vars)
+
+			cfg, err := config.Load()
+			if tt.wantErr != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, cfg.MaxConcurrentRegistrations)
+		})
+	}
 }
 
 func TestLoadRequiresDatabaseURL(t *testing.T) {

@@ -218,6 +218,67 @@ func TestSweepFailsWhenNetworkUnresolvable(t *testing.T) {
 	assert.ErrorContains(t, err, "rpc down")
 }
 
+// TestSweepDefersWhenTheRegistryIsBusy proves a busy registry defers a
+// refresh rather than failing it: the contract stays stale, so the next
+// sweep picks it up.
+func TestSweepDefersWhenTheRegistryIsBusy(t *testing.T) {
+	t.Parallel()
+
+	c := &clock{t: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
+	db := store.NewMemory()
+	db.SetClock(c.Now)
+	fake := stellartest.New()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reg := registry.New(fake, spec.XDRDecoder{}, db, registry.Options{
+		Logger:         log,
+		MaxConcurrent:  1,
+		AcquireTimeout: 50 * time.Millisecond,
+	})
+
+	id := contractID(t, 1)
+	fake.Deploy(id, moduleWith(t, "hello"))
+	_, err := reg.Register(context.Background(), id)
+	require.NoError(t, err)
+
+	// Hold the only slot with a registration that does not finish.
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	fake.BeforeFetch = func(ctx context.Context, contractID string) error {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	held := make(chan struct{})
+	go func() {
+		defer close(held)
+		_, _ = reg.Register(context.Background(), id)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the registration to start")
+	}
+
+	c.Advance(interval + time.Minute)
+	r, err := refresher.New(reg, refresher.Options{Interval: interval, Logger: log, Now: c.Now})
+	require.NoError(t, err)
+
+	sum, err := r.Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, refresher.Summary{Checked: 1, Busy: 1}, sum,
+		"a busy registry defers the refresh rather than failing it")
+
+	close(release)
+	<-held
+}
+
 func TestRunStopsOnCancel(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)

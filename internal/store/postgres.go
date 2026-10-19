@@ -39,6 +39,23 @@ func NewPostgresFromPool(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{pool: pool}
 }
 
+// Ping checks that the database at databaseURL answers.
+//
+// It opens nothing but a connection and changes nothing, so a health check
+// can use it without leaving a trace.
+func Ping(ctx context.Context, databaseURL string) error {
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return fmt.Errorf("store: connecting to postgres: %w", err)
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		return fmt.Errorf("store: pinging postgres: %w", err)
+	}
+	return nil
+}
+
 // Close releases the connection pool.
 func (p *Postgres) Close() error {
 	p.pool.Close()

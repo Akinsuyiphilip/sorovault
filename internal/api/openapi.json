@@ -37,7 +37,7 @@
         ],
         "responses": {
           "200": { "description": "One page of contracts.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContractList" } } } },
-          "503": { "$ref": "#/components/responses/NetworkMismatch" }
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
         }
       },
       "post": {
@@ -59,7 +59,7 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" },
-          "503": { "$ref": "#/components/responses/NetworkMismatch" }
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
         }
       }
     },
@@ -115,7 +115,7 @@
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" },
-          "503": { "$ref": "#/components/responses/NetworkMismatch" }
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
         }
       }
     },
@@ -155,7 +155,13 @@
       "BadRequest": { "description": "Malformed input, such as an invalid contract ID.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "NotFound": { "description": "No such contract, version or function.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
       "NoInterface": { "description": "The contract exists but has no interface to serve: a Stellar asset contract, or a module without a contractspecv0 section.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
-      "NetworkMismatch": { "description": "The RPC endpoint serves a different network than NETWORK_PASSPHRASE.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+      "ServiceUnavailable": {
+        "description": "The request could not be served now. Either the RPC endpoint serves a different network than NETWORK_PASSPHRASE, or the registry is already registering as many contracts as it is allowed to. In the second case the response carries a Retry-After header saying how long to wait before trying again.",
+        "headers": {
+          "Retry-After": { "description": "Seconds to wait before retrying. Present when the registry was busy.", "schema": { "type": "integer", "minimum": 1 } }
+        },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
     },
     "schemas": {
       "ContractID": { "type": "string", "pattern": "^C[A-Z2-7]{55}$", "description": "Strkey contract address." },

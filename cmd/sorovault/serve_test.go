@@ -93,7 +93,7 @@ func TestRootCmdWiring(t *testing.T) {
 		got[c.Name()] = true
 	}
 
-	for _, want := range []string{"add", "list", "get", "refresh", "serve", "migrate"} {
+	for _, want := range []string{"add", "list", "get", "refresh", "serve", "migrate", "doctor"} {
 		assert.True(t, got[want], "command %q should be registered", want)
 	}
 }

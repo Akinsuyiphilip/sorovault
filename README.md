@@ -136,6 +136,7 @@ All configuration is environment variables. Only `DATABASE_URL` (or the path in 
 | Variable | Default | Purpose |
 |---|---|---|
 | `DATABASE_URL` | — | Postgres connection string. **Required** (or set `DATABASE_URL_FILE` to read it from a file). |
+| `MAX_CONCURRENT_REGISTRATIONS` | `4` | how many registrations and refreshes run at once |
 | `RPC_URL` | `https://soroban-testnet.stellar.org` | Stellar RPC endpoint |
 | `NETWORK_PASSPHRASE` | `Test SDF Network ; September 2015` | the network you expect `RPC_URL` to serve |
 | `HTTP_ADDR` | `:8080` | listen address |
@@ -159,6 +160,34 @@ A contract that fails to refresh — expired, or an RPC error — is logged and
 skipped, and the sweep carries on. One sweep runs at startup and then one per
 interval; a sweep in progress at shutdown is cancelled before the database is
 closed.
+
+### Bounded registrations
+
+Registering a contract downloads its WASM module and decodes it in memory,
+so the number of registrations running at once is what keeps peak memory
+finite. `MAX_CONCURRENT_REGISTRATIONS` (default `4`) bounds it, across every
+client: the API, the CLI and the background refresher all draw on the same
+budget, because they all download modules.
+
+A request that cannot be given a slot waits a couple of seconds for one and
+is then refused with **503** and a `Retry-After` header, rather than queueing
+without limit:
+
+```console
+$ curl -si -X POST localhost:8080/api/contracts \
+    -H 'content-type: application/json' \
+    -d '{"contract_id":"CDZZ…4PAN"}'
+HTTP/1.1 503 Service Unavailable
+Retry-After: 2
+…
+{"error":"registry: too many registrations in flight: 4 already running"}
+```
+
+The wait is short on purpose: a client that is told to come back shortly is
+better served than one left hanging behind a queue the server cannot drain.
+The refresher treats a busy registry the same way — it skips the contract and
+picks it up on the next sweep, since a contract that was not refreshed stays
+stale.
 
 ## HTTP API
 
@@ -204,6 +233,7 @@ sorovault get <contract_id>         # --function, --wasm-hash, --json
 sorovault codegen <contract_id>     # typed TypeScript client; -o, --wasm-hash
 sorovault serve                     # JSON API + browse UI
 sorovault migrate                   # apply schema migrations
+sorovault doctor                    # check a deployment's health
 ```
 
 `add` and `refresh` accept several contract IDs and report per-contract
@@ -219,6 +249,44 @@ inputs:
 
 returns: bool
 ```
+
+### `sorovault doctor`
+
+When a deployment misbehaves, the same four questions come up: can it reach
+Postgres, are the migrations up to date, does the RPC endpoint answer, and
+is it serving the network this instance expects. `doctor` answers all four in
+one go:
+
+```console
+$ sorovault doctor
+PASS  database    the database answers
+PASS  migrations  the database is at version 2, the latest is 2
+PASS  rpc         the endpoint is reachable, serving testnet
+PASS  passphrase  the endpoint serves the configured network
+```
+
+Every check runs, so one failure does not hide the others, and the command
+exits non-zero if any of them failed. `--json` emits the same report for a
+script to read:
+
+```console
+$ sorovault doctor --json
+{
+  "ok": false,
+  "checks": [
+    { "name": "database", "ok": true, "detail": "the database answers" },
+    { "name": "migrations", "ok": false, "error": "the database is at version 1, but version 2 is available; run `sorovault migrate`" },
+    { "name": "rpc", "ok": true, "detail": "the endpoint is reachable, serving testnet" },
+    { "name": "passphrase", "ok": true, "detail": "the endpoint serves the configured network" }
+  ]
+}
+```
+
+The command is strictly read-only: it opens a connection and reads, and
+never writes to the database, applies a migration, or changes anything on
+the network. It reads the same configuration as everything else, so a
+deployment missing its `DATABASE_URL` is reported as a configuration error
+rather than a passing check.
 
 ## Typed clients
 

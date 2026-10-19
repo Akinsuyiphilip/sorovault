@@ -36,6 +36,12 @@ type Fake struct {
 	// NetworkErr, when set, is returned by Network.
 	NetworkErr error
 
+	// BeforeFetch, when set, runs before every fetch and hash lookup, and
+	// may block. Holding a fetch open is how a test proves a concurrency
+	// bound: the calls that got a slot are inside it, and the ones that did
+	// not never reach it.
+	BeforeFetch func(ctx context.Context, contractID string) error
+
 	// Calls counts invocations by method name, so a test can assert that
 	// refreshing an unchanged contract did not download its module.
 	Calls map[string]int
@@ -81,6 +87,11 @@ func (f *Fake) FetchContract(ctx context.Context, contractID string) (*stellar.C
 	if err := stellar.ValidateContractID(contractID); err != nil {
 		return nil, err
 	}
+	// The hook runs before the lock is taken, so a test can hold a fetch
+	// open without freezing the whole fake.
+	if err := f.beforeFetch(ctx, contractID); err != nil {
+		return nil, err
+	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -110,6 +121,9 @@ func (f *Fake) WasmHash(ctx context.Context, contractID string) (string, error) 
 	if err := stellar.ValidateContractID(contractID); err != nil {
 		return "", err
 	}
+	if err := f.beforeFetch(ctx, contractID); err != nil {
+		return "", err
+	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -124,6 +138,18 @@ func (f *Fake) WasmHash(ctx context.Context, contractID string) (string, error) 
 		return "", fmt.Errorf("%w: %s", stellar.ErrContractNotFound, contractID)
 	}
 	return HashOf(module), nil
+}
+
+// beforeFetch runs the BeforeFetch hook, if the test set one.
+func (f *Fake) beforeFetch(ctx context.Context, contractID string) error {
+	f.mu.Lock()
+	hook := f.BeforeFetch
+	f.mu.Unlock()
+
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx, contractID)
 }
 
 // Network implements stellar.Fetcher.

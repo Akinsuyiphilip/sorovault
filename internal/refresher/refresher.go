@@ -9,6 +9,7 @@ package refresher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -81,6 +82,9 @@ type Summary struct {
 	Changed int `json:"changed"`
 	// Failed is how many could not be refreshed. Their errors are logged.
 	Failed int `json:"failed"`
+	// Busy is how many were not attempted because the registry was at its
+	// concurrency limit. They stay stale, so the next sweep picks them up.
+	Busy int `json:"busy"`
 }
 
 // Run sweeps once immediately and then every interval until ctx is
@@ -149,6 +153,15 @@ func (r *Refresher) Sweep(ctx context.Context) (Summary, error) {
 		sum.Checked++
 		result, err := r.refreshOne(ctx, id)
 		if err != nil {
+			// A busy registry is not a failure: the contract stays stale
+			// and the next sweep tries again. Failing it would report a
+			// problem where there is none.
+			if errors.Is(err, registry.ErrBusy) {
+				sum.Busy++
+				r.log.DebugContext(ctx, "refresh deferred, registry busy",
+					"contract_id", id, "network", network)
+				continue
+			}
 			sum.Failed++
 			r.log.WarnContext(ctx, "refresh failed",
 				"contract_id", id, "network", network, "error", err)

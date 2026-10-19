@@ -1,12 +1,17 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/golang-migrate/migrate/v4"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib" // database/sql driver for golang-migrate
 
 	sorovault "github.com/soroworks/sorovault"
@@ -77,6 +82,73 @@ func newMigrator(databaseURL string) (*migrate.Migrate, error) {
 		return nil, fmt.Errorf("store: preparing migrations: %w", err)
 	}
 	return m, nil
+}
+
+// MigrationStatus reports the migration version the database has applied,
+// the latest version among the embedded migrations, and whether the database
+// is marked dirty.
+//
+// It reads the version table directly rather than through golang-migrate,
+// because the migrator creates that table when it opens the database: a
+// check that only reads must not leave a table behind. A database with no
+// version table has had no migration applied, which is version zero.
+func MigrationStatus(ctx context.Context, databaseURL string) (current, latest uint, dirty bool, err error) {
+	latest, err = LatestMigrationVersion()
+	if err != nil {
+		return 0, 0, false, err
+	}
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return 0, latest, false, fmt.Errorf("store: connecting to postgres: %w", err)
+	}
+	defer pool.Close()
+
+	const q = `SELECT version, dirty FROM schema_migrations LIMIT 1`
+	err = pool.QueryRow(ctx, q).Scan(&current, &dirty)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// The table is there but empty: no migration has been applied.
+		return 0, latest, false, nil
+	case err != nil:
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			// The table does not exist: no migration has been applied.
+			return 0, latest, false, nil
+		}
+		return 0, latest, false, fmt.Errorf("store: reading migration version: %w", err)
+	}
+	return current, latest, dirty, nil
+}
+
+// LatestMigrationVersion reports the highest version among the embedded
+// migrations.
+//
+// The versions are read through golang-migrate's own source, so the naming
+// convention stays in one place.
+func LatestMigrationVersion() (uint, error) {
+	src, err := iofs.New(sorovault.Migrations, "migrations")
+	if err != nil {
+		return 0, fmt.Errorf("store: reading embedded migrations: %w", err)
+	}
+
+	version, err := src.First()
+	if err != nil {
+		return 0, fmt.Errorf("store: reading embedded migrations: %w", err)
+	}
+	for {
+		next, err := src.Next(version)
+		if err != nil {
+			// The source reports the end of the migrations as a missing
+			// path.
+			if errors.Is(err, fs.ErrNotExist) {
+				break
+			}
+			return 0, fmt.Errorf("store: reading embedded migrations: %w", err)
+		}
+		version = next
+	}
+	return version, nil
 }
 
 // closeMigrator releases a migrator's source and database handles. Errors

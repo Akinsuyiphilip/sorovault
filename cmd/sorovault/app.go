@@ -43,6 +43,7 @@ func newApp(ctx context.Context) (*app, error) {
 	reg := registry.New(fetcher, spec.XDRDecoder{}, db, registry.Options{
 		ExpectPassphrase: cfg.NetworkPassphrase,
 		Logger:           log,
+		MaxConcurrent:    cfg.MaxConcurrentRegistrations,
 	})
 
 	return &app{

@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -299,6 +300,13 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, registry.ErrNetworkMismatch):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 
+	case errors.Is(err, registry.ErrBusy):
+		// The registry is already doing as much as it is allowed to. The
+		// request was fine, so the answer is "come back shortly", not an
+		// error: the client should not queue behind the others either.
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(s.reg.AcquireTimeout())))
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+
 	case isBadContractID(err):
 		writeError(w, http.StatusBadRequest, err.Error())
 
@@ -330,4 +338,14 @@ func intParam(raw string, fallback int) int {
 		return fallback
 	}
 	return v
+}
+
+// retryAfterSeconds renders a wait as the whole seconds a client should
+// wait before retrying, which is what the Retry-After header asks for.
+func retryAfterSeconds(d time.Duration) int {
+	seconds := int((d + time.Second - 1) / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	return seconds
 }
