@@ -135,6 +135,46 @@ func TestRegisterContract(t *testing.T) {
 	assert.Equal(t, "balance", fns[0].(map[string]any)["name"])
 }
 
+func TestCatalogUploadedWasm(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	module := moduleWith(t, "proposed")
+	hash := h.fake.UploadWasm(module)
+
+	resp, raw := h.do(t, http.MethodPost, "/api/wasm/"+hash, "")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(raw))
+	got := h.decode(t, raw)
+	assert.Equal(t, hash, got["wasm_hash"])
+	assert.True(t, got["created"].(bool))
+	assert.Equal(t, "proposed", got["interface"].(map[string]any)["functions"].([]any)[0].(map[string]any)["name"])
+
+	resp, raw = h.do(t, http.MethodGet, "/api/wasm/"+hash+"?network=testnet", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+	assert.Equal(t, hash, h.decode(t, raw)["wasm_hash"])
+	_, err := h.store.GetContract(context.Background(), "testnet", idA)
+	assert.ErrorIs(t, err, store.ErrNotFound, "cataloguing code must not require or create a contract")
+}
+
+func TestUpdateContractSource(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "balance"))
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idA+`"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	body := `{"source_url":"https://github.com/soroworks/sorovault","source_commit":"0123456789abcdef0123456789abcdef01234567"}`
+	resp, raw := h.do(t, http.MethodPut, "/api/contracts/"+idA+"/source", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+	got := h.decode(t, raw)
+	assert.Equal(t, "https://github.com/soroworks/sorovault", got["source_url"])
+	assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", got["source_commit"])
+
+	resp, raw = h.do(t, http.MethodPut, "/api/contracts/"+idB+"/source", body)
+	assert.Equal(t, http.StatusNotFound, resp.StatusCode, string(raw))
+}
+
 // TestRegisterExistingContractReturns200 distinguishes creating a record
 // from re-verifying one, which is what makes the endpoint safely retryable.
 func TestRegisterExistingContractReturns200(t *testing.T) {

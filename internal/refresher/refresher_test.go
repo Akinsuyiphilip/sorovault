@@ -94,9 +94,44 @@ func (f *fixture) refresher(t *testing.T) *refresher.Refresher {
 		Interval: interval,
 		Logger:   f.log,
 		Now:      f.clock.Now,
+		Wait: func(ctx context.Context, d time.Duration) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			f.clock.Advance(d)
+			return nil
+		},
 	})
 	require.NoError(t, err)
 	return r
+}
+
+func TestSweepSpreadsRefreshesAcrossInterval(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	for i := 0; i < 4; i++ {
+		f.register(t, contractID(t, i), "hello")
+	}
+	f.clock.Advance(interval + time.Minute)
+
+	var waits []time.Duration
+	r, err := refresher.New(f.reg, refresher.Options{
+		Interval: interval,
+		Logger:   f.log,
+		Now:      f.clock.Now,
+		Wait: func(ctx context.Context, d time.Duration) error {
+			waits = append(waits, d)
+			f.clock.Advance(d)
+			return ctx.Err()
+		},
+	})
+	require.NoError(t, err)
+
+	sum, err := r.Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 4, sum.Checked)
+	assert.Equal(t, []time.Duration{interval / 4, interval / 4, interval / 4}, waits,
+		"refreshes after the first must start at evenly spaced offsets")
 }
 
 func (f *fixture) register(t *testing.T, id, fn string) {

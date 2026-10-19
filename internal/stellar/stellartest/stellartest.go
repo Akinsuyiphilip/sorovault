@@ -25,6 +25,7 @@ type Fake struct {
 	mu sync.Mutex
 
 	contracts map[string][]byte
+	wasm      map[string][]byte
 
 	// Passphrase is what Network reports. It defaults to testnet.
 	Passphrase string
@@ -53,9 +54,19 @@ var _ stellar.Fetcher = (*Fake)(nil)
 func New() *Fake {
 	return &Fake{
 		contracts:  map[string][]byte{},
+		wasm:       map[string][]byte{},
 		Passphrase: stellar.NetworkTestnet,
 		Calls:      map[string]int{},
 	}
+}
+
+// UploadWasm makes code available by hash without creating a contract instance.
+func (f *Fake) UploadWasm(wasmModule []byte) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	hash := HashOf(wasmModule)
+	f.wasm[hash] = append([]byte(nil), wasmModule...)
+	return hash
 }
 
 // Deploy makes contractID resolve to the given module.
@@ -111,6 +122,30 @@ func (f *Fake) FetchContract(ctx context.Context, contractID string) (*stellar.C
 		WasmHash: HashOf(module),
 		Wasm:     module,
 	}, nil
+}
+
+// FetchWasm implements stellar.Fetcher.
+func (f *Fake) FetchWasm(ctx context.Context, wasmHash string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls["FetchWasm"]++
+	module, ok := f.wasm[wasmHash]
+	if !ok {
+		for _, deployed := range f.contracts {
+			if HashOf(deployed) == wasmHash {
+				module = deployed
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", stellar.ErrWasmNotFound, wasmHash)
+	}
+	return append([]byte(nil), module...), nil
 }
 
 // WasmHash implements stellar.Fetcher.

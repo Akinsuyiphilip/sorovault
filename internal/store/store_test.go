@@ -101,6 +101,18 @@ const (
 )
 
 func runStoreSuite(t *testing.T, newStore factory) {
+	t.Run("catalogued wasm does not require a contract", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.SaveWasmSpec(ctx, "testnet", "hash1", iface("proposed")))
+		got, err := s.GetWasmSpec(ctx, "testnet", "hash1")
+		require.NoError(t, err)
+		assert.Equal(t, "proposed", got.Interface.Functions[0].Name)
+		_, err = s.GetContract(ctx, "testnet", idA)
+		assert.ErrorIs(t, err, store.ErrNotFound, "cataloguing code must not create a contract row")
+	})
+
 	t.Run("save and read back", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()
@@ -119,6 +131,17 @@ func runStoreSuite(t *testing.T, newStore factory) {
 		require.Len(t, spec.Interface.Functions, 1)
 		assert.Equal(t, "balance", spec.Interface.Functions[0].Name)
 		assert.Equal(t, "Address", spec.Interface.Functions[0].Inputs[0].Type.Display)
+
+		require.NoError(t, s.UpdateSource(ctx, "testnet", idA, "https://github.com/example/repo", "0123456789abcdef0123456789abcdef01234567"))
+		got, err = s.GetContract(ctx, "testnet", idA)
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/example/repo", got.SourceURL)
+		assert.Equal(t, "0123456789abcdef0123456789abcdef01234567", got.SourceCommit)
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "hash1"), iface("balance")))
+		got, err = s.GetContract(ctx, "testnet", idA)
+		require.NoError(t, err)
+		assert.Equal(t, "https://github.com/example/repo", got.SourceURL, "refresh must preserve source metadata")
 	})
 
 	t.Run("missing rows report ErrNotFound", func(t *testing.T) {

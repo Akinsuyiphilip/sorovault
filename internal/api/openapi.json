@@ -78,6 +78,43 @@
         }
       }
     },
+    "/api/contracts/{id}/source": {
+      "put": {
+        "summary": "Attach source repository metadata",
+        "operationId": "updateContractSource",
+        "parameters": [{ "$ref": "#/components/parameters/id" }, { "$ref": "#/components/parameters/network" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SourceRequest" } } } },
+        "responses": {
+          "200": { "description": "Updated contract metadata.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Contract" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/api/wasm/{hash}": {
+      "get": {
+        "summary": "Get a catalogued uploaded WASM interface",
+        "operationId": "getWasmSpec",
+        "parameters": [{ "$ref": "#/components/parameters/hash" }, { "$ref": "#/components/parameters/network" }],
+        "responses": {
+          "200": { "description": "The catalogued interface.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WasmSpec" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      },
+      "post": {
+        "summary": "Catalog uploaded code by WASM hash",
+        "description": "Fetches and decodes uploaded code even when no deployed contract currently references it.",
+        "operationId": "catalogWasm",
+        "parameters": [{ "$ref": "#/components/parameters/hash" }],
+        "responses": {
+          "201": { "description": "Newly catalogued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WasmCatalogResult" } } } },
+          "200": { "description": "Already catalogued.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WasmCatalogResult" } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "422": { "$ref": "#/components/responses/NoInterface" }
+        }
+      }
+    },
     "/api/contracts/{id}/functions/{fn}": {
       "get": {
         "summary": "One function in detail",
@@ -148,6 +185,7 @@
   "components": {
     "parameters": {
       "id": { "name": "id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/ContractID" } },
+      "hash": { "name": "hash", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/WasmHash" } },
       "network": { "name": "network", "in": "query", "description": "Network namespace, e.g. testnet or public. Defaults to the network this instance's RPC serves.", "schema": { "type": "string" } },
       "wasmHash": { "name": "wasm_hash", "in": "query", "description": "Select a superseded interface version by WASM hash instead of the current one.", "schema": { "$ref": "#/components/schemas/WasmHash" } }
     },
@@ -174,6 +212,8 @@
           "network": { "type": "string" },
           "current_wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
           "name": { "type": "string" },
+          "source_url": { "type": "string", "format": "uri" },
+          "source_commit": { "type": "string" },
           "first_seen": { "type": "string", "format": "date-time" },
           "last_refreshed": { "type": "string", "format": "date-time" },
           "matches": { "type": "array", "items": { "type": "string" }, "description": "Interface symbols a search query matched. Only present on search results." }
@@ -200,6 +240,31 @@
         },
         "required": ["contract", "created", "changed"]
       },
+      "SourceRequest": {
+        "type": "object",
+        "properties": {
+          "source_url": { "type": "string", "format": "uri" },
+          "source_commit": { "type": "string", "pattern": "^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$" }
+        },
+        "required": ["source_url"],
+        "additionalProperties": false
+      },
+      "WasmSpec": {
+        "type": "object",
+        "properties": {
+          "network": { "type": "string" },
+          "wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
+          "interface": { "$ref": "#/components/schemas/Interface" },
+          "decoded_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["network", "wasm_hash", "interface", "decoded_at"]
+      },
+      "WasmCatalogResult": {
+        "allOf": [
+          { "$ref": "#/components/schemas/WasmSpec" },
+          { "type": "object", "properties": { "created": { "type": "boolean" } }, "required": ["created"] }
+        ]
+      },
       "ContractInterface": {
         "type": "object",
         "properties": {
@@ -207,6 +272,8 @@
           "network": { "type": "string" },
           "wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
           "name": { "type": "string" },
+          "source_url": { "type": "string", "format": "uri" },
+          "source_commit": { "type": "string" },
           "first_seen": { "type": "string", "format": "date-time" },
           "decoded_at": { "type": "string", "format": "date-time" },
           "current": { "type": "boolean", "description": "False when an older version was requested with wasm_hash." },

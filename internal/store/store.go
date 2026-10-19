@@ -25,6 +25,8 @@ type Contract struct {
 	Network         string    `json:"network"`
 	CurrentWasmHash string    `json:"current_wasm_hash"`
 	Name            string    `json:"name,omitempty"`
+	SourceURL       string    `json:"source_url,omitempty"`
+	SourceCommit    string    `json:"source_commit,omitempty"`
 	FirstSeen       time.Time `json:"first_seen"`
 	LastRefreshed   time.Time `json:"last_refreshed"`
 
@@ -70,6 +72,15 @@ type Spec struct {
 	WasmHash   string           `json:"wasm_hash"`
 	Interface  *model.Interface `json:"interface"`
 	DecodedAt  time.Time        `json:"decoded_at"`
+}
+
+// WasmSpec is a decoded interface for uploaded code that no registered
+// contract currently runs.
+type WasmSpec struct {
+	Network   string           `json:"network"`
+	WasmHash  string           `json:"wasm_hash"`
+	Interface *model.Interface `json:"interface"`
+	DecodedAt time.Time        `json:"decoded_at"`
 }
 
 // SpecVersion summarises a stored spec without its body, for listing the
@@ -129,6 +140,16 @@ type ContractPage struct {
 // Implementations must be safe for concurrent use. Two are provided: Postgres
 // for real deployments, and an in-memory one used by tests.
 type Store interface {
+	// UpdateSource attaches repository metadata to an existing contract.
+	UpdateSource(ctx context.Context, network, contractID, sourceURL, sourceCommit string) error
+
+	// SaveWasmSpec records an interface by network and WASM hash, independent
+	// of any deployed contract.
+	SaveWasmSpec(ctx context.Context, network, wasmHash string, iface *model.Interface) error
+
+	// GetWasmSpec returns an interface for uploaded code by its hash.
+	GetWasmSpec(ctx context.Context, network, wasmHash string) (*WasmSpec, error)
+
 	// Save records a decoded interface and points the contract at it.
 	//
 	// It is idempotent per WASM hash: re-saving a hash already stored for a

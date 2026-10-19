@@ -22,6 +22,7 @@ type Memory struct {
 	mu        sync.RWMutex
 	contracts map[string]Contract
 	specs     map[string][]Spec
+	wasmSpecs map[string]WasmSpec
 	nextID    int64
 
 	// now is the clock, swappable so tests can produce deterministic and
@@ -36,6 +37,7 @@ func NewMemory() *Memory {
 	return &Memory{
 		contracts: make(map[string]Contract),
 		specs:     make(map[string][]Spec),
+		wasmSpecs: make(map[string]WasmSpec),
 		now:       time.Now,
 	}
 }
@@ -52,6 +54,47 @@ func (m *Memory) SetClock(now func() time.Time) {
 func (m *Memory) Close() error { return nil }
 
 func key(network, contractID string) string { return network + "\x00" + contractID }
+
+func wasmSpecKey(network, wasmHash string) string { return network + "\x00" + wasmHash }
+
+// SaveWasmSpec stores an interface for uploaded code independent of contracts.
+func (m *Memory) SaveWasmSpec(ctx context.Context, network, wasmHash string, iface *model.Interface) error {
+	if iface == nil {
+		return errors.New("store: cannot save a nil interface")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	cloned, err := cloneInterface(iface)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.wasmSpecs[wasmSpecKey(network, wasmHash)] = WasmSpec{
+		Network: network, WasmHash: wasmHash, Interface: cloned, DecodedAt: m.now(),
+	}
+	return nil
+}
+
+// GetWasmSpec returns a hash-addressed interface without requiring a contract.
+func (m *Memory) GetWasmSpec(ctx context.Context, network, wasmHash string) (*WasmSpec, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	s, ok := m.wasmSpecs[wasmSpecKey(network, wasmHash)]
+	if !ok {
+		return nil, fmt.Errorf("%w: wasm spec %s on %s", ErrNotFound, wasmHash, network)
+	}
+	cloned, err := cloneInterface(s.Interface)
+	if err != nil {
+		return nil, err
+	}
+	s.Interface = cloned
+	return &s, nil
+}
 
 // Save records a decoded interface and points the contract at it, matching
 // the Postgres implementation's append-don't-overwrite semantics.
@@ -83,6 +126,12 @@ func (m *Memory) Save(ctx context.Context, c Contract, iface *model.Interface) e
 		if c.Name == "" {
 			c.Name = existing.Name
 		}
+		if c.SourceURL == "" {
+			c.SourceURL = existing.SourceURL
+		}
+		if c.SourceCommit == "" {
+			c.SourceCommit = existing.SourceCommit
+		}
 	} else {
 		c.FirstSeen = now
 	}
@@ -105,6 +154,24 @@ func (m *Memory) Save(ctx context.Context, c Contract, iface *model.Interface) e
 		Interface:  cloned,
 		DecodedAt:  now,
 	})
+	return nil
+}
+
+// UpdateSource attaches repository metadata to an existing contract.
+func (m *Memory) UpdateSource(ctx context.Context, network, contractID, sourceURL, sourceCommit string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	k := key(network, contractID)
+	c, ok := m.contracts[k]
+	if !ok {
+		return fmt.Errorf("%w: contract %s on %s", ErrNotFound, contractID, network)
+	}
+	c.SourceURL = sourceURL
+	c.SourceCommit = sourceCommit
+	m.contracts[k] = c
 	return nil
 }
 

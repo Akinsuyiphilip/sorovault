@@ -263,11 +263,11 @@ func newCodegenCmd() *cobra.Command {
 The client is generated from what SoroVault already holds, so no network
 access is needed. --wasm-hash generates against a superseded version.
 
-Only TypeScript is supported today; the output builds on @stellar/stellar-sdk.`,
+Supported formats are TypeScript (ts) and Markdown (md).`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if lang != "ts" && lang != "typescript" {
-				return fmt.Errorf("unsupported --lang %q (supported: ts)", lang)
+			if lang != "ts" && lang != "typescript" && lang != "md" && lang != "markdown" {
+				return fmt.Errorf("unsupported --lang %q (supported: ts, md)", lang)
 			}
 			return withApp(cmd.Context(), func(ctx context.Context, a *app) error {
 				net := network
@@ -283,11 +283,17 @@ Only TypeScript is supported today; the output builds on @stellar/stellar-sdk.`,
 					return err
 				}
 
-				source, err := codegen.TypeScript(stored.Interface, codegen.Source{
+				src := codegen.Source{
 					ContractID: stored.ContractID,
 					Network:    stored.Network,
 					WasmHash:   stored.WasmHash,
-				})
+				}
+				var source string
+				if lang == "md" || lang == "markdown" {
+					source, err = codegen.Markdown(stored.Interface, src)
+				} else {
+					source, err = codegen.TypeScript(stored.Interface, src)
+				}
 				if err != nil {
 					return err
 				}
@@ -307,7 +313,7 @@ Only TypeScript is supported today; the output builds on @stellar/stellar-sdk.`,
 
 	cmd.Flags().StringVar(&network, "network", "", "network to read from (default: the network RPC_URL serves)")
 	cmd.Flags().StringVar(&wasmHash, "wasm-hash", "", "generate for a specific version instead of the current one")
-	cmd.Flags().StringVar(&lang, "lang", "ts", "target language (ts)")
+	cmd.Flags().StringVar(&lang, "lang", "ts", "output format (ts or md)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write to this file instead of stdout")
 	return cmd
 }

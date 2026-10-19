@@ -154,7 +154,8 @@ Set `REFRESH_INTERVAL` (for example `6h`) and `sorovault serve` re-checks, on
 that schedule, every contract on its network that has not been refreshed
 within the interval. An upgraded contract gets a new interface version
 exactly as `POST /api/contracts/{id}/refresh` would record it; an unchanged
-one costs a single `getLedgerEntries` call and is not re-downloaded.
+one costs a single `getLedgerEntries` call and is not re-downloaded. Refreshes
+are spread at even offsets across the interval to avoid an RPC traffic burst.
 
 A contract that fails to refresh — expired, or an RPC error — is logged and
 skipped, and the sweep carries on. One sweep runs at startup and then one per
@@ -195,7 +196,10 @@ stale.
 |---|---|---|
 | `GET` | `/api/contracts` | list contracts — `?q=`, `?network=`, `?limit=`, `?offset=` |
 | `POST` | `/api/contracts` | register a contract — `{"contract_id": "C…"}` |
+| `POST` | `/api/wasm/{hash}` | catalog uploaded code before a contract runs it |
+| `GET` | `/api/wasm/{hash}` | read a catalogued uploaded-code interface — `?network=` |
 | `GET` | `/api/contracts/{id}` | the decoded ABI — `?network=`, `?wasm_hash=` |
+| `PUT` | `/api/contracts/{id}/source` | attach a `source_url` and optional `source_commit` |
 | `GET` | `/api/contracts/{id}/functions/{fn}` | one function in detail |
 | `GET` | `/api/contracts/{id}/client.ts` | typed TypeScript client — `?wasm_hash=`, `?download=1` |
 | `GET` | `/api/openapi.json` | OpenAPI 3.1 description of this API |
@@ -230,7 +234,7 @@ sorovault add <contract_id>...      # fetch, decode and register
 sorovault refresh <contract_id>...  # re-check for an upgraded interface
 sorovault list                      # -q, --network, --limit, --offset
 sorovault get <contract_id>         # --function, --wasm-hash, --json
-sorovault codegen <contract_id>     # typed TypeScript client; -o, --wasm-hash
+sorovault codegen <contract_id>     # --lang ts|md; -o, --wasm-hash
 sorovault serve                     # JSON API + browse UI
 sorovault migrate                   # apply schema migrations
 sorovault doctor                    # check a deployment's health
@@ -322,6 +326,24 @@ the SDK unchanged. It requires `@stellar/stellar-sdk` 14 or later and
 CI compiles the generated client for the real testnet fixture with
 `tsc --strict` against a pinned SDK, so a change to the generator that would
 produce broken TypeScript fails the build.
+
+## Markdown documentation
+
+Generate a standalone Markdown reference from a registered contract's ABI,
+including function signatures and comments, user-defined types, events, and
+the selected WASM version:
+
+```console
+$ sorovault codegen CDZZ…4PAN --lang md -o CONTRACT.md
+```
+
+## Uploaded code and source links
+
+`POST /api/wasm/{hash}` catalogs uploaded code by its 64-character SHA-256
+hash, even before a contract instance uses it. Its decoded interface is then
+available from `GET /api/wasm/{hash}`. Attach a contract repository URL and an
+optional 40- or 64-character commit hash with `PUT /api/contracts/{id}/source`;
+the browse page displays the repository and commit with the interface.
 
 ## The ABI JSON
 
@@ -415,7 +437,7 @@ internal/stellar   RPC client and contract fetch
 internal/store     Postgres registry, migrations, and an in-memory store
 internal/registry  register/refresh orchestration
 internal/refresher scheduled re-checks of registered contracts
-internal/codegen   typed client generation from a stored ABI
+internal/codegen   Markdown documentation and typed client generation from a stored ABI
 internal/api       chi JSON handlers
 internal/web       html/template + htmx browse UI
 ```
@@ -430,9 +452,12 @@ why the whole stack can be tested without a network or a database.
 
 ```
 contracts (network, contract_id)  PK
-  current_wasm_hash, name, first_seen, last_refreshed
+  current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed
 
 specs     (network, contract_id, wasm_hash)  UNIQUE
+  spec jsonb, decoded_at
+
+wasm_specs (network, wasm_hash)  PK
   spec jsonb, decoded_at
 ```
 

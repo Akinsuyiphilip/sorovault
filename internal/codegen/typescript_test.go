@@ -157,3 +157,44 @@ func TestOutputIsDeterministic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Less(t, strings.Index(a, "interface Alpha"), strings.Index(a, "interface Zed"))
 }
+
+func TestMarkdownDocumentsInterface(t *testing.T) {
+	t.Parallel()
+	iface := &model.Interface{
+		Functions: []model.Function{{
+			Name:    "transfer",
+			Doc:     "Move tokens to an address.",
+			Inputs:  []model.Param{{Name: "to", Doc: "Recipient.", Type: model.Scalar(model.KindAddress)}},
+			Outputs: []model.Type{model.Scalar(model.KindBool)},
+		}},
+		Types: model.Types{
+			Structs:    []model.Struct{{Name: "Config", Doc: "Contract settings.", Fields: []model.StructField{{Name: "fee", Doc: "Fee in bps.", Type: model.Scalar(model.KindU32)}}}},
+			Unions:     []model.Union{{Name: "Action", Doc: "Supported actions.", Cases: []model.UnionCase{{Name: "Pause", Doc: "Pause transfers."}}}},
+			Enums:      []model.Enum{{Name: "Status", Doc: "Current status.", Cases: []model.EnumCase{{Name: "Active", Value: 1}}}},
+			ErrorEnums: []model.ErrorEnum{{Name: "ContractError", Cases: []model.EnumCase{{Name: "Unauthorized", Value: 4}}}},
+		},
+		Events: []model.Event{{Name: "Transfer", Doc: "Emitted after a transfer.", Params: []model.EventParam{{Name: "to", Type: model.Scalar(model.KindAddress), Location: "topic-list"}}, DataFormat: "single-value"}},
+	}
+
+	got, err := codegen.Markdown(iface, src)
+	require.NoError(t, err)
+	for _, want := range []string{
+		"# Contract `" + src.ContractID + "`",
+		"WASM hash: `" + src.WasmHash + "`",
+		"### `fn transfer(to: Address) -> bool`",
+		"Move tokens to an address.",
+		"Recipient.",
+		"## Types",
+		"### `struct Config`",
+		"Fee in bps.",
+		"### `enum Action`",
+		"Pause transfers.",
+		"### `enum Status`",
+		"### `error ContractError`",
+		"## Events",
+		"### `Transfer`",
+		"Emitted after a transfer.",
+	} {
+		assert.Contains(t, got, want)
+	}
+}

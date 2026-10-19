@@ -76,6 +76,28 @@ func TestRegister(t *testing.T) {
 	assert.Equal(t, "hello", result.Interface.Functions[0].Name)
 }
 
+func TestCatalogWasmWithoutDeployedContract(t *testing.T) {
+	t.Parallel()
+
+	reg, fake, db := newRegistry(t)
+	module := moduleWith(t, "proposed")
+	hash := stellartest.HashOf(module)
+	fake.UploadWasm(module)
+
+	result, err := reg.CatalogWasm(context.Background(), hash)
+	require.NoError(t, err)
+	assert.Equal(t, hash, result.WasmHash)
+	assert.Equal(t, "testnet", result.Network)
+	require.Len(t, result.Interface.Functions, 1)
+	assert.Equal(t, "proposed", result.Interface.Functions[0].Name)
+
+	stored, err := db.GetWasmSpec(context.Background(), "testnet", hash)
+	require.NoError(t, err)
+	assert.Equal(t, "proposed", stored.Interface.Functions[0].Name)
+	_, err = db.GetContract(context.Background(), "testnet", idA)
+	assert.ErrorIs(t, err, store.ErrNotFound, "cataloguing code must not fabricate a deployed contract")
+}
+
 func TestRegisterIsIdempotent(t *testing.T) {
 	t.Parallel()
 

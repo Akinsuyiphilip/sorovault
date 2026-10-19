@@ -62,6 +62,45 @@ func (p *Postgres) Close() error {
 	return nil
 }
 
+// SaveWasmSpec stores an interface for uploaded code independent of contracts.
+func (p *Postgres) SaveWasmSpec(ctx context.Context, network, wasmHash string, iface *model.Interface) error {
+	if iface == nil {
+		return errors.New("store: cannot save a nil interface")
+	}
+	body, err := json.Marshal(iface)
+	if err != nil {
+		return fmt.Errorf("store: encoding interface: %w", err)
+	}
+	const q = `
+		INSERT INTO wasm_specs (network, wasm_hash, spec)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (network, wasm_hash) DO UPDATE SET spec = EXCLUDED.spec, decoded_at = now()`
+	if _, err := p.pool.Exec(ctx, q, network, wasmHash, body); err != nil {
+		return fmt.Errorf("store: saving wasm spec %s: %w", wasmHash, err)
+	}
+	return nil
+}
+
+// GetWasmSpec returns a hash-addressed interface without requiring a contract.
+func (p *Postgres) GetWasmSpec(ctx context.Context, network, wasmHash string) (*WasmSpec, error) {
+	const q = `SELECT network, wasm_hash, spec, decoded_at FROM wasm_specs WHERE network = $1 AND wasm_hash = $2`
+	var s WasmSpec
+	var body []byte
+	err := p.pool.QueryRow(ctx, q, network, wasmHash).Scan(&s.Network, &s.WasmHash, &body, &s.DecodedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: wasm spec %s on %s", ErrNotFound, wasmHash, network)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: loading wasm spec %s: %w", wasmHash, err)
+	}
+	var iface model.Interface
+	if err := json.Unmarshal(body, &iface); err != nil {
+		return nil, fmt.Errorf("store: decoding wasm spec %s: %w", wasmHash, err)
+	}
+	s.Interface = &iface
+	return &s, nil
+}
+
 // Save upserts the contract and appends its spec version, in one transaction
 // so a contract row can never end up pointing at a spec that was not stored.
 func (p *Postgres) Save(ctx context.Context, c Contract, iface *model.Interface) error {
@@ -117,13 +156,13 @@ func (p *Postgres) Save(ctx context.Context, c Contract, iface *model.Interface)
 // GetContract returns one contract's current state.
 func (p *Postgres) GetContract(ctx context.Context, network, contractID string) (*Contract, error) {
 	const q = `
-		SELECT network, contract_id, current_wasm_hash, name, first_seen, last_refreshed
+		SELECT network, contract_id, current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed
 		FROM contracts
 		WHERE network = $1 AND contract_id = $2`
 
 	var c Contract
 	err := p.pool.QueryRow(ctx, q, network, contractID).Scan(
-		&c.Network, &c.ContractID, &c.CurrentWasmHash, &c.Name, &c.FirstSeen, &c.LastRefreshed,
+		&c.Network, &c.ContractID, &c.CurrentWasmHash, &c.Name, &c.SourceURL, &c.SourceCommit, &c.FirstSeen, &c.LastRefreshed,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: contract %s on %s", ErrNotFound, contractID, network)
@@ -132,6 +171,19 @@ func (p *Postgres) GetContract(ctx context.Context, network, contractID string) 
 		return nil, fmt.Errorf("store: loading contract %s: %w", contractID, err)
 	}
 	return &c, nil
+}
+
+// UpdateSource attaches repository metadata to an existing contract.
+func (p *Postgres) UpdateSource(ctx context.Context, network, contractID, sourceURL, sourceCommit string) error {
+	const q = `UPDATE contracts SET source_url = $3, source_commit = $4 WHERE network = $1 AND contract_id = $2`
+	tag, err := p.pool.Exec(ctx, q, network, contractID, sourceURL, sourceCommit)
+	if err != nil {
+		return fmt.Errorf("store: updating source for %s: %w", contractID, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: contract %s on %s", ErrNotFound, contractID, network)
+	}
+	return nil
 }
 
 // ListContracts returns a filtered, paged listing ordered by most recently
@@ -146,7 +198,7 @@ func (p *Postgres) ListContracts(ctx context.Context, f ListFilter) (*ContractPa
 	// removed by an upgrade stops matching.
 	const q = `
 		WITH matched AS (
-			SELECT c.network, c.contract_id, c.current_wasm_hash, c.name,
+			SELECT c.network, c.contract_id, c.current_wasm_hash, c.name, c.source_url, c.source_commit,
 			       c.first_seen, c.last_refreshed, COALESCE(s.symbols, '') AS symbols
 			FROM contracts c
 			LEFT JOIN specs s
@@ -157,7 +209,7 @@ func (p *Postgres) ListContracts(ctx context.Context, f ListFilter) (*ContractPa
 			               OR c.name ILIKE '%' || $2 || '%'
 			               OR s.symbols ILIKE '%' || $2 || '%')
 		)
-		SELECT network, contract_id, current_wasm_hash, name, first_seen, last_refreshed,
+		SELECT network, contract_id, current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed,
 		       symbols, count(*) OVER () AS total
 		FROM matched
 		ORDER BY last_refreshed DESC, contract_id
@@ -175,7 +227,7 @@ func (p *Postgres) ListContracts(ctx context.Context, f ListFilter) (*ContractPa
 		var symbols string
 		var total int
 		if err := rows.Scan(
-			&c.Network, &c.ContractID, &c.CurrentWasmHash, &c.Name,
+			&c.Network, &c.ContractID, &c.CurrentWasmHash, &c.Name, &c.SourceURL, &c.SourceCommit,
 			&c.FirstSeen, &c.LastRefreshed, &symbols, &total,
 		); err != nil {
 			return nil, fmt.Errorf("store: scanning contract: %w", err)

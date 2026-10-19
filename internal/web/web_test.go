@@ -32,6 +32,7 @@ type harness struct {
 	server *httptest.Server
 	fake   *stellartest.Fake
 	reg    *registry.Registry
+	store  *store.Memory
 }
 
 func newHarness(t *testing.T) *harness {
@@ -52,7 +53,7 @@ func newHarness(t *testing.T) *harness {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &harness{server: srv, fake: fake, reg: reg}
+	return &harness{server: srv, fake: fake, reg: reg, store: memory}
 }
 
 func (h *harness) get(t *testing.T, path string) (*http.Response, string) {
@@ -198,6 +199,8 @@ func TestContractPage(t *testing.T) {
 
 	h := newHarness(t)
 	h.register(t, idA)
+	require.NoError(t, h.store.UpdateSource(context.Background(), "testnet", idA,
+		"https://github.com/soroworks/sorovault", "0123456789abcdef0123456789abcdef01234567"))
 
 	resp, body := h.get(t, "/contracts/"+idA)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -208,6 +211,8 @@ func TestContractPage(t *testing.T) {
 	assert.Contains(t, body, "error Error")
 	assert.Contains(t, body, "Voted", "the event should be listed")
 	assert.Contains(t, body, "rssdkver", "build metadata should be shown")
+	assert.Contains(t, body, `href="https://github.com/soroworks/sorovault"`)
+	assert.Contains(t, body, "0123456789abcdef0123456789abcdef01234567")
 	assert.Contains(t, body, "current")
 	assert.Contains(t, body, "/api/contracts/"+idA+"/client.ts?", "the typed client should be linked")
 }

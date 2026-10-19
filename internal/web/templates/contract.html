@@ -8,6 +8,12 @@
 <dl class="facts">
   <div><dt>Network</dt><dd><span class="badge">{{.Contract.Network}}</span></dd></div>
   <div><dt>WASM hash</dt><dd class="mono break">{{.Spec.WasmHash}}</dd></div>
+  {{if .Contract.SourceURL}}
+  <div>
+    <dt>Source</dt>
+    <dd><a href="{{.Contract.SourceURL}}">Repository</a>{{if .Contract.SourceCommit}} <span class="dim">at <code>{{.Contract.SourceCommit}}</code></span>{{end}}</dd>
+  </div>
+  {{end}}
   <div><dt>First seen</dt><dd>{{.Contract.FirstSeen.UTC.Format "2006-01-02 15:04"}} UTC</dd></div>
   <div><dt>Decoded</dt><dd>{{.Spec.DecodedAt.UTC.Format "2006-01-02 15:04"}} UTC</dd></div>
 </dl>

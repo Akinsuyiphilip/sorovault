@@ -71,6 +71,17 @@ func (f *RPCFetcher) FetchContract(ctx context.Context, contractID string) (*Con
 	}, nil
 }
 
+// FetchWasm returns uploaded code by its SHA-256 hash.
+func (f *RPCFetcher) FetchWasm(ctx context.Context, wasmHash string) ([]byte, error) {
+	hashBytes, err := hex.DecodeString(wasmHash)
+	if err != nil || len(hashBytes) != 32 {
+		return nil, fmt.Errorf("stellar: invalid wasm hash %q", wasmHash)
+	}
+	var hash xdr.Hash
+	copy(hash[:], hashBytes)
+	return f.codeByHash(ctx, hash)
+}
+
 // instanceWasmHash reads the contract's instance entry and returns the hash
 // of the WASM its executable points at.
 func (f *RPCFetcher) instanceWasmHash(ctx context.Context, contractID string) (xdr.Hash, error) {
@@ -124,7 +135,7 @@ func (f *RPCFetcher) codeByHash(ctx context.Context, hash xdr.Hash) ([]byte, err
 		return nil, err
 	}
 	if entry == nil {
-		return nil, fmt.Errorf("stellar: no code entry for wasm hash %x (it may have expired)", hash)
+		return nil, fmt.Errorf("%w: no code entry for wasm hash %x (it may have expired)", ErrWasmNotFound, hash)
 	}
 
 	var data xdr.LedgerEntryData

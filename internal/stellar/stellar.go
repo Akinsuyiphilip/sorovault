@@ -23,6 +23,9 @@ var ErrContractNotFound = errors.New("stellar: contract not found on network")
 // than uploaded, so they have no interface to decode.
 var ErrNoWasm = errors.New("stellar: contract has no uploaded wasm")
 
+// ErrWasmNotFound reports that the network has no uploaded code for a hash.
+var ErrWasmNotFound = errors.New("stellar: wasm not found on network")
+
 // Contract is a deployed contract's code as fetched from the network.
 type Contract struct {
 	// ID is the contract's strkey address ("C...").
@@ -42,6 +45,10 @@ type Contract struct {
 type Fetcher interface {
 	// FetchContract returns the contract's WASM and the hash it is keyed by.
 	FetchContract(ctx context.Context, contractID string) (*Contract, error)
+
+	// FetchWasm returns uploaded code by its SHA-256 hash, whether or not a
+	// contract instance currently references it.
+	FetchWasm(ctx context.Context, wasmHash string) ([]byte, error)
 
 	// WasmHash returns just the hash the contract currently points at,
 	// without downloading the module. Refresh uses it to decide whether

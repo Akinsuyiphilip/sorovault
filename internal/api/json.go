@@ -23,6 +23,11 @@ type registerRequest struct {
 	ContractID string `json:"contract_id"`
 }
 
+type sourceRequest struct {
+	SourceURL    string `json:"source_url"`
+	SourceCommit string `json:"source_commit,omitempty"`
+}
+
 type listResponse struct {
 	Contracts []store.Contract `json:"contracts"`
 	Total     int              `json:"total"`
@@ -31,12 +36,14 @@ type listResponse struct {
 }
 
 type contractResponse struct {
-	ContractID string    `json:"contract_id"`
-	Network    string    `json:"network"`
-	WasmHash   string    `json:"wasm_hash"`
-	Name       string    `json:"name,omitempty"`
-	FirstSeen  time.Time `json:"first_seen"`
-	DecodedAt  time.Time `json:"decoded_at"`
+	ContractID   string    `json:"contract_id"`
+	Network      string    `json:"network"`
+	WasmHash     string    `json:"wasm_hash"`
+	Name         string    `json:"name,omitempty"`
+	SourceURL    string    `json:"source_url,omitempty"`
+	SourceCommit string    `json:"source_commit,omitempty"`
+	FirstSeen    time.Time `json:"first_seen"`
+	DecodedAt    time.Time `json:"decoded_at"`
 
 	// Current is false when an older version was requested explicitly.
 	Current bool `json:"current"`

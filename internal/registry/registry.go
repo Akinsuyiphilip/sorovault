@@ -10,13 +10,13 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/semaphore"
 
 	"github.com/soroworks/sorovault/internal/model"
 	"github.com/soroworks/sorovault/internal/spec"
@@ -29,30 +29,8 @@ import (
 // wrong namespace, so registration stops instead.
 var ErrNetworkMismatch = errors.New("registry: RPC endpoint serves a different network than configured")
 
-// ErrBusy reports that the registry was already doing as much work as it is
-// allowed to, and the operation could not start within the wait window.
-//
-// It is not a failure of the contract or the network: the same request will
-// very likely succeed a moment later, which is why callers answer it with a
-// 503 and a Retry-After rather than a 500.
-var ErrBusy = errors.New("registry: too many registrations in flight")
-
-// How many registrations and refreshes run at once, and how long one waits
-// for a slot before it is refused.
-const (
-	// DefaultMaxConcurrent is the number of registrations and refreshes
-	// that run at once when the operator does not say otherwise.
-	//
-	// Each registration holds a WASM module in memory while it decodes, so
-	// this is what keeps peak memory finite: without it, as many clients as
-	// care to ask would download a module at the same time.
-	DefaultMaxConcurrent = 4
-
-	// DefaultAcquireTimeout is how long an operation waits for a slot
-	// before it is refused. Long enough to ride out a short burst, short
-	// enough that a client is not left waiting on a busy registry.
-	DefaultAcquireTimeout = 2 * time.Second
-)
+// ErrInvalidWasmHash reports a hash that is not a 32-byte hexadecimal value.
+var ErrInvalidWasmHash = errors.New("registry: invalid wasm hash")
 
 // Registry registers and refreshes contracts.
 type Registry struct {
@@ -143,6 +121,15 @@ type Result struct {
 	// Changed is true when the contract's WASM hash differed from what was
 	// stored, so a new interface version was recorded.
 	Changed bool `json:"changed"`
+}
+
+// WasmResult describes a catalogued upload that may not be deployed yet.
+type WasmResult struct {
+	Network   string           `json:"network"`
+	WasmHash  string           `json:"wasm_hash"`
+	Interface *model.Interface `json:"interface"`
+	DecodedAt time.Time        `json:"decoded_at"`
+	Created   bool             `json:"created"`
 }
 
 // Network returns the label records are stored under, resolved from the RPC
@@ -284,6 +271,54 @@ func (r *Registry) Register(ctx context.Context, contractID string) (*Result, er
 	)
 
 	return result, nil
+}
+
+// CatalogWasm decodes code uploaded to the network without requiring a
+// contract instance to reference it.
+func (r *Registry) CatalogWasm(ctx context.Context, wasmHash string) (*WasmResult, error) {
+	rawHash, err := hex.DecodeString(wasmHash)
+	if err != nil || len(rawHash) != sha256.Size {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidWasmHash, wasmHash)
+	}
+	wasmHash = hex.EncodeToString(rawHash)
+
+	network, err := r.Network(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existing, err := r.store.GetWasmSpec(ctx, network, wasmHash); err == nil {
+		return &WasmResult{
+			Network: existing.Network, WasmHash: existing.WasmHash,
+			Interface: existing.Interface, DecodedAt: existing.DecodedAt,
+		}, nil
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return nil, err
+	}
+
+	wasm, err := r.fetcher.FetchWasm(ctx, wasmHash)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(wasm)
+	if hex.EncodeToString(digest[:]) != wasmHash {
+		return nil, fmt.Errorf("registry: fetched wasm does not match hash %s", wasmHash)
+	}
+
+	iface, err := r.decoder.Decode(wasm)
+	if err != nil {
+		return nil, fmt.Errorf("registry: decoding wasm %s: %w", wasmHash, err)
+	}
+	if err := r.store.SaveWasmSpec(ctx, network, wasmHash, iface); err != nil {
+		return nil, err
+	}
+	stored, err := r.store.GetWasmSpec(ctx, network, wasmHash)
+	if err != nil {
+		return nil, err
+	}
+	return &WasmResult{
+		Network: stored.Network, WasmHash: stored.WasmHash,
+		Interface: stored.Interface, DecodedAt: stored.DecodedAt, Created: true,
+	}, nil
 }
 
 // Refresh re-checks a registered contract against the network and records a
