@@ -56,6 +56,7 @@ func (s *Server) Routes() chi.Router {
 	r.Put("/contracts/{id}/source", s.updateContractSource)
 	r.Post("/contracts/{id}/refresh", s.refreshContract)
 	r.Get("/contracts/{id}/versions", s.listVersions)
+	r.Get("/contracts/{id}/functions", s.listFunctions)
 	r.Get("/contracts/{id}/functions/{fn}", s.getFunction)
 	r.Get("/contracts/{id}/client.ts", s.getTypeScriptClient)
 	r.Get("/openapi.json", serveOpenAPI)
@@ -306,6 +307,39 @@ func (s *Server) getFunction(w http.ResponseWriter, r *http.Request) {
 		WasmHash:   stored.WasmHash,
 		Signature:  fn.Signature(),
 		Function:   fn,
+	})
+}
+
+// listFunctions serves GET /api/contracts/{id}/functions.
+func (s *Server) listFunctions(w http.ResponseWriter, r *http.Request) {
+	contractID := chi.URLParam(r, "id")
+
+	network, err := s.network(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	wasmHash := strings.TrimSpace(r.URL.Query().Get("wasm_hash"))
+	stored, err := s.reg.Store().GetSpec(r.Context(), network, contractID, wasmHash)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	functions := make([]functionSummary, 0, len(stored.Interface.Functions))
+	for _, fn := range stored.Interface.Functions {
+		functions = append(functions, functionSummary{
+			Name:      fn.Name,
+			Signature: fn.Signature(),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, functionListResponse{
+		ContractID: stored.ContractID,
+		Network:    stored.Network,
+		WasmHash:   stored.WasmHash,
+		Functions:  functions,
 	})
 }
 

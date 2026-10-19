@@ -131,6 +131,22 @@
         }
       }
     },
+    "/api/contracts/{id}/functions": {
+      "get": {
+        "summary": "List a contract's function signatures",
+        "operationId": "listFunctions",
+        "description": "Returns function names and signatures without documentation or other interface details.",
+        "parameters": [
+          { "$ref": "#/components/parameters/id" },
+          { "$ref": "#/components/parameters/network" },
+          { "$ref": "#/components/parameters/wasmHash" }
+        ],
+        "responses": {
+          "200": { "description": "Function names and signatures.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FunctionList" } } } },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
     "/api/contracts/{id}/versions": {
       "get": {
         "summary": "Every stored interface version, newest first",
@@ -291,6 +307,25 @@
           "function": { "$ref": "#/components/schemas/Function" }
         },
         "required": ["contract_id", "network", "wasm_hash", "signature", "function"]
+      },
+      "FunctionList": {
+        "type": "object",
+        "properties": {
+          "contract_id": { "$ref": "#/components/schemas/ContractID" },
+          "network": { "type": "string" },
+          "wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
+          "functions": { "type": "array", "items": { "$ref": "#/components/schemas/FunctionSummary" } }
+        },
+        "required": ["contract_id", "network", "wasm_hash", "functions"]
+      },
+      "FunctionSummary": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "signature": { "type": "string" }
+        },
+        "required": ["name", "signature"],
+        "additionalProperties": false
       },
       "VersionList": {
         "type": "object",

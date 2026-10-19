@@ -405,6 +405,55 @@ func TestGetFunction(t *testing.T) {
 	})
 }
 
+func TestListFunctions(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	v1 := moduleWith(t, "balance")
+	h.fake.Deploy(idA, v1)
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idA+`"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode, string(raw))
+
+	oldHash := stellartest.HashOf(v1)
+	h.fake.Upgrade(idA, moduleWith(t, "total"))
+	resp, raw = h.do(t, http.MethodPost, "/api/contracts/"+idA+"/refresh", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	t.Run("current interface", func(t *testing.T) {
+		resp, raw := h.do(t, http.MethodGet, "/api/contracts/"+idA+"/functions", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+		got := h.decode(t, raw)
+		assert.Equal(t, idA, got["contract_id"])
+		assert.Equal(t, "testnet", got["network"])
+		functions := got["functions"].([]any)
+		require.Len(t, functions, 1)
+		function := functions[0].(map[string]any)
+		assert.Equal(t, "total", function["name"])
+		assert.Equal(t, "fn total(who: Address) -> u32", function["signature"])
+		assert.Len(t, function, 2, "function listings contain names and signatures, not docs")
+	})
+
+	t.Run("previous version selected by wasm_hash", func(t *testing.T) {
+		resp, raw := h.do(t, http.MethodGet, "/api/contracts/"+idA+"/functions?wasm_hash="+oldHash, "")
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+		functions := h.decode(t, raw)["functions"].([]any)
+		require.Len(t, functions, 1)
+		assert.Equal(t, "balance", functions[0].(map[string]any)["name"])
+	})
+
+	t.Run("no functions returns an empty list", func(t *testing.T) {
+		module := wasmtest.Module(wasmtest.Section{Name: wasm.SectionContractSpec})
+		h.fake.Deploy(idB, module)
+		resp, raw := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idB+`"}`)
+		require.Equal(t, http.StatusCreated, resp.StatusCode, string(raw))
+
+		resp, raw = h.do(t, http.MethodGet, "/api/contracts/"+idB+"/functions", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+		assert.Equal(t, []any{}, h.decode(t, raw)["functions"])
+	})
+}
+
 func TestVersionsAndRefresh(t *testing.T) {
 	t.Parallel()
 

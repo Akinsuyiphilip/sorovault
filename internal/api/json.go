@@ -63,6 +63,18 @@ type functionResponse struct {
 	Function model.Function `json:"function"`
 }
 
+type functionListResponse struct {
+	ContractID string            `json:"contract_id"`
+	Network    string            `json:"network"`
+	WasmHash   string            `json:"wasm_hash"`
+	Functions  []functionSummary `json:"functions"`
+}
+
+type functionSummary struct {
+	Name      string `json:"name"`
+	Signature string `json:"signature"`
+}
+
 type versionsResponse struct {
 	ContractID string              `json:"contract_id"`
 	Network    string              `json:"network"`
