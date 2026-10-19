@@ -117,6 +117,26 @@ $ curl -X POST localhost:8080/api/contracts \
 
 Open <http://localhost:8080> for the browse UI.
 
+### Kubernetes with Helm
+
+The chart at [`deploy/helm/sorovault`](deploy/helm/sorovault) deploys the API
+and runs database migrations before install and upgrade. It expects an
+existing PostgreSQL database; it does not install or manage PostgreSQL. Create
+a Secret containing the connection URL, then install the chart:
+
+```console
+$ kubectl create secret generic sorovault-db \\
+  --from-literal=DATABASE_URL='postgres://sorovault:password@postgres:5432/sorovault?sslmode=disable'
+$ helm upgrade --install sorovault ./deploy/helm/sorovault \\
+  --set database.existingSecret=sorovault-db
+```
+
+The secret name and key, image, service, and SoroVault environment settings can
+be overridden in a values file. `RPC_URL`, `NETWORK_PASSPHRASE`, `HTTP_ADDR`,
+`LOG_LEVEL`, `RPC_TIMEOUT`, and `REFRESH_INTERVAL` are exposed under `config`;
+use `extraEnv` for other environment variables. The server and migration Job
+run non-root with read-only root filesystems.
+
 ### Running locally
 
 ```console

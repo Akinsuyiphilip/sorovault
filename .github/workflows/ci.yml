@@ -92,6 +92,16 @@ jobs:
       - name: Type-check the golden client
         run: npm run typecheck
 
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - name: Lint chart
+        run: helm lint deploy/helm/sorovault --set database.existingSecret=sorovault-db
+      - name: Render chart
+        run: helm template sorovault deploy/helm/sorovault --set database.existingSecret=sorovault-db
+
   # The Go tests prove openapi.json matches the router; this proves it is a
   # valid OpenAPI document that client generators will accept.
   openapi-lint:

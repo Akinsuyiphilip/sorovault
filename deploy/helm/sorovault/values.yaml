@@ -1,0 +1,48 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/soroworks/sorovault
+  pullPolicy: IfNotPresent
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+
+database:
+  existingSecret: ""
+  secretKey: DATABASE_URL
+
+config:
+  rpcUrl: https://soroban-testnet.stellar.org
+  networkPassphrase: Test SDF Network ; September 2015
+  httpAddr: :8080
+  logLevel: info
+  rpcTimeout: 30s
+  refreshInterval: 0
+
+extraEnv: []
+
+service:
+  type: ClusterIP
+  port: 8080
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources: {}
