@@ -30,6 +30,12 @@ type Contract struct {
 	FirstSeen       time.Time `json:"first_seen"`
 	LastRefreshed   time.Time `json:"last_refreshed"`
 
+	// MissingSince is when a refresh first found the contract absent from
+	// the network. It is nil while the contract is live, and is cleared by
+	// the next save, which only happens once the contract has been fetched
+	// again.
+	MissingSince *time.Time `json:"missing_since,omitempty"`
+
 	// Matches lists the interface symbols — functions, types, events — that
 	// a search query matched. It is only set on search results, and is
 	// empty when the query matched the contract ID or name instead.
@@ -62,6 +68,73 @@ func matchSymbols(joined, query string) []string {
 		}
 	}
 	return out
+}
+
+// hasFunction reports whether an interface declares a function with exactly
+// this name.
+//
+// The match is exact: "transfer" is not "transfer_from" and not
+// "Transferable". A caller asking for a function wants the interface to
+// implement it, not merely to mention it.
+func hasFunction(iface *model.Interface, name string) bool {
+	if iface == nil {
+		return false
+	}
+	for _, fn := range iface.Functions {
+		if fn.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// hasType reports whether an interface declares a user-defined type with
+// exactly this name.
+//
+// Error enums count: they are types the contract defines, and a client
+// matching on a type name means the type it will use.
+func hasType(iface *model.Interface, name string) bool {
+	if iface == nil {
+		return false
+	}
+	for _, s := range iface.Types.Structs {
+		if s.Name == name {
+			return true
+		}
+	}
+	for _, u := range iface.Types.Unions {
+		if u.Name == name {
+			return true
+		}
+	}
+	for _, e := range iface.Types.Enums {
+		if e.Name == name {
+			return true
+		}
+	}
+	for _, e := range iface.Types.ErrorEnums {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAll reports whether an interface declares every requested function and
+// type name. The in-memory store uses it; the Postgres one asks the
+// database the same question.
+func hasAll(iface *model.Interface, functions, types []string) bool {
+	for _, name := range functions {
+		if !hasFunction(iface, name) {
+			return false
+		}
+	}
+	for _, name := range types {
+		if !hasType(iface, name) {
+			return false
+		}
+	}
+	return true
 }
 
 // Spec is one decoded interface version of a contract.
@@ -99,6 +172,13 @@ type ListFilter struct {
 	// name, and the names of the functions, types and events in the
 	// contract's current interface. Empty matches everything.
 	Query string
+	// Functions restricts results to contracts whose current interface
+	// declares a function with exactly this name. Every name must match,
+	// so two names ask for a contract with both.
+	Functions []string
+	// Types restricts results to contracts whose current interface declares
+	// a user-defined type with exactly this name. Every name must match.
+	Types []string
 	// Limit is the maximum number of rows to return. Zero means
 	// DefaultLimit; anything above MaxLimit is clamped to MaxLimit.
 	Limit int
@@ -117,6 +197,8 @@ const (
 // straight from user input do not have to.
 func (f *ListFilter) Normalize() {
 	f.Query = strings.TrimSpace(f.Query)
+	f.Functions = cleanNames(f.Functions)
+	f.Types = cleanNames(f.Types)
 	if f.Limit <= 0 {
 		f.Limit = DefaultLimit
 	}
@@ -126,6 +208,20 @@ func (f *ListFilter) Normalize() {
 	if f.Offset < 0 {
 		f.Offset = 0
 	}
+}
+
+// cleanNames trims a list of symbol names and drops the empty ones, so a
+// repeated query parameter with no value does not filter everything out.
+func cleanNames(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	return out
 }
 
 // ContractPage is one page of a contract listing.
@@ -160,6 +256,15 @@ type Store interface {
 
 	// GetContract returns a contract's current state.
 	GetContract(ctx context.Context, network, contractID string) (*Contract, error)
+
+	// MarkMissing records that a contract could not be found on the
+	// network, and when it was first noticed to be gone.
+	//
+	// The mark is not overwritten once it is set: the timestamp says when
+	// the contract disappeared, not when it was last looked for. Saving
+	// the contract again clears it, since a stored interface means the
+	// contract was live.
+	MarkMissing(ctx context.Context, network, contractID string, since time.Time) error
 
 	// ListContracts returns a filtered, paged listing.
 	ListContracts(ctx context.Context, f ListFilter) (*ContractPage, error)

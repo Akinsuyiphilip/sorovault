@@ -23,7 +23,8 @@ func setEnv(t *testing.T, vars map[string]string) {
 	for _, key := range []string{
 		"RPC_URL", "NETWORK_PASSPHRASE", "DATABASE_URL", "DATABASE_URL_FILE",
 		"HTTP_ADDR", "LOG_LEVEL", "RPC_TIMEOUT", "REFRESH_INTERVAL",
-		"MAX_CONCURRENT_REGISTRATIONS",
+		"MAX_CONCURRENT_REGISTRATIONS", "REFRESH_WEBHOOK_URL",
+		"REFRESH_WEBHOOK_SECRET",
 	} {
 		if v, ok := vars[key]; ok {
 			t.Setenv(key, v)
@@ -155,6 +156,43 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	_, err := config.Load()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DATABASE_URL")
+}
+
+func TestRefreshWebhook(t *testing.T) {
+	t.Run("unset", func(t *testing.T) {
+		setEnv(t, map[string]string{"DATABASE_URL": testDatabaseURL})
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Empty(t, cfg.RefreshWebhookURL)
+		assert.Empty(t, cfg.RefreshWebhookSecret)
+	})
+
+	t.Run("set", func(t *testing.T) {
+		setEnv(t, map[string]string{
+			"DATABASE_URL":           testDatabaseURL,
+			"REFRESH_WEBHOOK_URL":    "https://hooks.example.test/sorovault",
+			"REFRESH_WEBHOOK_SECRET": "s3cret",
+		})
+
+		cfg, err := config.Load()
+		require.NoError(t, err)
+		assert.Equal(t, "https://hooks.example.test/sorovault", cfg.RefreshWebhookURL)
+		assert.Equal(t, "s3cret", cfg.RefreshWebhookSecret)
+	})
+
+	t.Run("a URL that cannot be posted to is refused", func(t *testing.T) {
+		for _, url := range []string{"not a url", "/relative", "ftp://example.test/hook"} {
+			setEnv(t, map[string]string{
+				"DATABASE_URL":        testDatabaseURL,
+				"REFRESH_WEBHOOK_URL": url,
+			})
+
+			_, err := config.Load()
+			require.Error(t, err, "url %q", url)
+			assert.Contains(t, err.Error(), "REFRESH_WEBHOOK_URL")
+		}
+	})
 }
 
 func TestLogLevels(t *testing.T) {

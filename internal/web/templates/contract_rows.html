@@ -17,6 +17,7 @@
       <tr>
         <td>
           <a class="mono" href="/contracts/{{.ContractID}}?network={{.Network}}">{{.ContractID}}</a>
+          {{if .MissingSince}}<span class="badge missing" title="not found on the network since {{.MissingSince.UTC.Format "2006-01-02 15:04"}} UTC">missing</span>{{end}}
           {{if .Name}}<div class="name">{{.Name}}</div>{{end}}
           {{if .Matches}}<div class="matches">matches {{range $i, $m := .Matches}}{{if $i}}, {{end}}<code>{{$m}}</code>{{end}}</div>{{end}}
         </td>

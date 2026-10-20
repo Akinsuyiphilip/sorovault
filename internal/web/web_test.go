@@ -108,6 +108,28 @@ func TestIndexEmpty(t *testing.T) {
 	assert.Contains(t, body, "sorovault add")
 }
 
+// TestIndexListsContracts proves a contract that has gone missing is
+// marked in the listing, so a reader can tell it apart from a live one.
+func TestIndexMarksMissingContracts(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	h.fake.Remove(idA)
+	_, err := h.reg.Refresh(context.Background(), idA)
+	require.NoError(t, err)
+
+	resp, body := h.get(t, "/")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "missing",
+		"the listing marks a contract that is no longer on the network")
+
+	resp, body = h.get(t, "/contracts/"+idA)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "not on the network any more")
+}
+
 func TestIndexListsContracts(t *testing.T) {
 	t.Parallel()
 

@@ -106,6 +106,31 @@ func (f *fixture) refresher(t *testing.T) *refresher.Refresher {
 	return r
 }
 
+// refresherWith builds a refresher that reports upgrades to a webhook.
+func (f *fixture) refresherWith(t *testing.T, opts refresher.WebhookOptions) *refresher.Refresher {
+	t.Helper()
+
+	opts.Logger = f.log
+	webhook, err := refresher.NewWebhook(opts)
+	require.NoError(t, err)
+
+	r, err := refresher.New(f.reg, refresher.Options{
+		Interval: interval,
+		Logger:   f.log,
+		Notifier: webhook,
+		Now:      f.clock.Now,
+		Wait: func(ctx context.Context, d time.Duration) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			f.clock.Advance(d)
+			return nil
+		},
+	})
+	require.NoError(t, err)
+	return r
+}
+
 func TestSweepSpreadsRefreshesAcrossInterval(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -211,17 +236,86 @@ func TestSweepAdvancesLastRefreshedOnUnchanged(t *testing.T) {
 func TestSweepContinuesPastFailures(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
-	gone, kept := contractID(t, 1), contractID(t, 2)
-	f.register(t, gone, "hello")
+	broken, kept := contractID(t, 1), contractID(t, 2)
+	f.register(t, broken, "hello")
 	f.register(t, kept, "hello")
 
-	f.fake.Remove(gone)
+	// One contract's RPC calls fail; the other must still be refreshed.
+	f.fake.BeforeFetch = func(ctx context.Context, contractID string) error {
+		if contractID == broken {
+			return errors.New("rpc down")
+		}
+		return nil
+	}
 	f.fake.Upgrade(kept, moduleWith(t, "v2"))
 	f.clock.Advance(interval + time.Minute)
 
 	sum, err := f.refresher(t).Sweep(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, refresher.Summary{Checked: 2, Changed: 1, Failed: 1}, sum)
+}
+
+// TestSweepCountsAMissingContractApart proves a contract that has gone from
+// the network is not counted as a failure: the registry keeps what it knows
+// about it, and says when it disappeared.
+func TestSweepCountsAMissingContractApart(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	id := contractID(t, 1)
+	f.register(t, id, "hello")
+
+	f.fake.Remove(id)
+	f.clock.Advance(interval + time.Minute)
+
+	sum, err := f.refresher(t).Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, refresher.Summary{Checked: 1, Missing: 1}, sum,
+		"a missing contract is not a failed refresh")
+
+	got, err := f.db.GetContract(context.Background(), "testnet", id)
+	require.NoError(t, err)
+	require.NotNil(t, got.MissingSince, "the contract must be marked as missing")
+
+	// The mark is not moved by the next sweep.
+	first := *got.MissingSince
+	f.clock.Advance(interval + time.Minute)
+	sum, err = f.refresher(t).Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, refresher.Summary{Checked: 1, Missing: 1}, sum)
+
+	got, err = f.db.GetContract(context.Background(), "testnet", id)
+	require.NoError(t, err)
+	require.NotNil(t, got.MissingSince)
+	assert.Equal(t, first.UTC(), got.MissingSince.UTC(),
+		"the mark says when the contract went away, not when it was last looked for")
+}
+
+// TestSweepClearsTheMissingMark proves a contract that comes back is
+// marked live again.
+func TestSweepClearsTheMissingMark(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	id := contractID(t, 1)
+	f.register(t, id, "hello")
+
+	f.fake.Remove(id)
+	f.clock.Advance(interval + time.Minute)
+	_, err := f.refresher(t).Sweep(context.Background())
+	require.NoError(t, err)
+
+	got, err := f.db.GetContract(context.Background(), "testnet", id)
+	require.NoError(t, err)
+	require.NotNil(t, got.MissingSince)
+
+	f.fake.Deploy(id, moduleWith(t, "hello"))
+	f.clock.Advance(interval + time.Minute)
+	sum, err := f.refresher(t).Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, refresher.Summary{Checked: 1}, sum)
+
+	got, err = f.db.GetContract(context.Background(), "testnet", id)
+	require.NoError(t, err)
+	assert.Nil(t, got.MissingSince)
 }
 
 // More contracts than fit on one listing page, every one of which moves to

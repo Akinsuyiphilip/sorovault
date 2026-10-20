@@ -16,11 +16,63 @@ import (
 )
 
 // maxRequestBody caps how much a client may POST. Requests here carry a
-// single contract ID, so anything larger is a mistake or an attack.
+// single contract ID, or a bounded list of them, so anything larger is a
+// mistake or an attack.
 const maxRequestBody = 64 << 10
+
+// MaxBatchContracts is the most contract IDs one batch request may carry.
+//
+// Each registration costs two RPC round trips, so a batch of twenty is
+// forty of them: enough to seed a deployment, few enough to finish inside
+// the server's request timeout.
+const MaxBatchContracts = 20
+
+// The statuses a batch result can carry.
+const (
+	// batchStatusCreated means the contract was not in the registry before.
+	batchStatusCreated = "created"
+	// batchStatusUnchanged means the contract was already registered and
+	// still runs the same interface.
+	batchStatusUnchanged = "unchanged"
+	// batchStatusChanged means the contract was already registered but has
+	// been upgraded since it was last fetched.
+	batchStatusChanged = "changed"
+	// batchStatusError means the contract could not be registered.
+	batchStatusError = "error"
+)
 
 type registerRequest struct {
 	ContractID string `json:"contract_id"`
+}
+
+type batchRegisterRequest struct {
+	ContractIDs []string `json:"contract_ids"`
+}
+
+// batchResult is the outcome of one contract in a batch.
+type batchResult struct {
+	ContractID string `json:"contract_id"`
+	// Status is one of created, unchanged, changed or error.
+	Status  string `json:"status"`
+	Created bool   `json:"created"`
+	Changed bool   `json:"changed"`
+	// Contract and Interface are present when the registration worked.
+	Contract  *store.Contract  `json:"contract,omitempty"`
+	Interface *model.Interface `json:"interface,omitempty"`
+	// Error and Code are present when it did not: Code is the status code
+	// the contract would have had on its own.
+	Error string `json:"error,omitempty"`
+	Code  int    `json:"code,omitempty"`
+}
+
+// batchResponse is the outcome of a whole batch.
+type batchResponse struct {
+	Results []batchResult `json:"results"`
+	// Created, Unchanged, Changed and Failed count the results by status.
+	Created   int `json:"created"`
+	Unchanged int `json:"unchanged"`
+	Changed   int `json:"changed"`
+	Failed    int `json:"failed"`
 }
 
 type sourceRequest struct {
@@ -36,14 +88,15 @@ type listResponse struct {
 }
 
 type contractResponse struct {
-	ContractID   string    `json:"contract_id"`
-	Network      string    `json:"network"`
-	WasmHash     string    `json:"wasm_hash"`
-	Name         string    `json:"name,omitempty"`
-	SourceURL    string    `json:"source_url,omitempty"`
-	SourceCommit string    `json:"source_commit,omitempty"`
-	FirstSeen    time.Time `json:"first_seen"`
-	DecodedAt    time.Time `json:"decoded_at"`
+	ContractID   string     `json:"contract_id"`
+	Network      string     `json:"network"`
+	WasmHash     string     `json:"wasm_hash"`
+	Name         string     `json:"name,omitempty"`
+	SourceURL    string     `json:"source_url,omitempty"`
+	SourceCommit string     `json:"source_commit,omitempty"`
+	FirstSeen    time.Time  `json:"first_seen"`
+	DecodedAt    time.Time  `json:"decoded_at"`
+	MissingSince *time.Time `json:"missing_since,omitempty"`
 
 	// Current is false when an older version was requested explicitly.
 	Current bool `json:"current"`

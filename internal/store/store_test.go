@@ -399,6 +399,138 @@ func runStoreSuite(t *testing.T, newStore factory) {
 		}
 	})
 
+	t.Run("exact function names are matched exactly", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		rich := iface("transfer")
+		rich.Functions = append(rich.Functions, model.Function{Name: "transfer_from"})
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), rich))
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "h2"), iface("balance")))
+
+		page, err := s.ListContracts(ctx, store.ListFilter{Functions: []string{"transfer"}})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idA, page.Contracts[0].ContractID,
+			"transfer_from is not transfer")
+
+		page, err = s.ListContracts(ctx, store.ListFilter{Functions: []string{"transfer_from"}})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idA, page.Contracts[0].ContractID)
+
+		page, err = s.ListContracts(ctx, store.ListFilter{Functions: []string{"Transfer"}})
+		require.NoError(t, err)
+		assert.Zero(t, page.Total, "the match is exact, and so is the case")
+
+		// Every requested function has to be there.
+		page, err = s.ListContracts(ctx, store.ListFilter{Functions: []string{"transfer", "balance"}})
+		require.NoError(t, err)
+		assert.Zero(t, page.Total, "no contract declares both functions")
+
+		page, err = s.ListContracts(ctx, store.ListFilter{Functions: []string{"transfer", "transfer_from"}})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idA, page.Contracts[0].ContractID)
+	})
+
+	t.Run("exact type names are matched exactly", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		rich := iface("f")
+		rich.Types.Structs = []model.Struct{{Name: "Balance", Fields: []model.StructField{}}}
+		rich.Types.Enums = []model.Enum{{Name: "State", Cases: []model.EnumCase{}}}
+		rich.Types.ErrorEnums = []model.ErrorEnum{{Name: "Failed", Cases: []model.EnumCase{}}}
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), rich))
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "h2"), iface("g")))
+
+		for _, name := range []string{"Balance", "State", "Failed"} {
+			page, err := s.ListContracts(ctx, store.ListFilter{Types: []string{name}})
+			require.NoError(t, err)
+			require.Equal(t, 1, page.Total, "type %q", name)
+			assert.Equal(t, idA, page.Contracts[0].ContractID)
+		}
+
+		page, err := s.ListContracts(ctx, store.ListFilter{Types: []string{"Bal"}})
+		require.NoError(t, err)
+		assert.Zero(t, page.Total, "a type name is matched exactly, not as a prefix")
+
+		page, err = s.ListContracts(ctx, store.ListFilter{Types: []string{"Balance", "State"}})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idA, page.Contracts[0].ContractID)
+	})
+
+	t.Run("exact filters combine with the query and the network", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("transfer")))
+		require.NoError(t, s.Save(ctx, contract(idB, "public", "h2"), iface("balance")))
+
+		page, err := s.ListContracts(ctx, store.ListFilter{
+			Functions: []string{"balance"},
+			Network:   "public",
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idB, page.Contracts[0].ContractID)
+
+		page, err = s.ListContracts(ctx, store.ListFilter{
+			Functions: []string{"balance"},
+			Query:     "CDZZZPY",
+		})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total)
+		assert.Equal(t, idB, page.Contracts[0].ContractID)
+
+		// The query matches one contract and the function filter another,
+		// so nothing matches both.
+		page, err = s.ListContracts(ctx, store.ListFilter{
+			Functions: []string{"balance"},
+			Query:     "CDZZXV",
+		})
+		require.NoError(t, err)
+		assert.Zero(t, page.Total, "the query and the function filter must both match")
+	})
+
+	t.Run("a contract that left the network is marked missing", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("f")))
+
+		since := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+		require.NoError(t, s.MarkMissing(ctx, "testnet", idA, since))
+
+		got, err := s.GetContract(ctx, "testnet", idA)
+		require.NoError(t, err)
+		require.NotNil(t, got.MissingSince)
+		assert.Equal(t, since, got.MissingSince.UTC())
+
+		// A second sighting must not move the mark: it says when the
+		// contract went away, not when it was last looked for.
+		require.NoError(t, s.MarkMissing(ctx, "testnet", idA, since.Add(time.Hour)))
+		got, err = s.GetContract(ctx, "testnet", idA)
+		require.NoError(t, err)
+		require.NotNil(t, got.MissingSince)
+		assert.Equal(t, since, got.MissingSince.UTC())
+
+		// Saving the contract again means it was live, so the mark goes.
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("f")))
+		got, err = s.GetContract(ctx, "testnet", idA)
+		require.NoError(t, err)
+		assert.Nil(t, got.MissingSince)
+	})
+
+	t.Run("marking an unknown contract is not found", func(t *testing.T) {
+		s := newStore(t)
+
+		err := s.MarkMissing(context.Background(), "testnet", idA, time.Now())
+		assert.ErrorIs(t, err, store.ErrNotFound)
+	})
+
 	t.Run("query is trimmed", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()

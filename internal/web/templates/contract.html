@@ -16,7 +16,18 @@
   {{end}}
   <div><dt>First seen</dt><dd>{{.Contract.FirstSeen.UTC.Format "2006-01-02 15:04"}} UTC</dd></div>
   <div><dt>Decoded</dt><dd>{{.Spec.DecodedAt.UTC.Format "2006-01-02 15:04"}} UTC</dd></div>
+  {{if .Contract.MissingSince}}
+  <div><dt>Missing since</dt><dd>{{.Contract.MissingSince.UTC.Format "2006-01-02 15:04"}} UTC</dd></div>
+  {{end}}
 </dl>
+
+{{if .Contract.MissingSince}}
+  <p class="notice missing">
+    This contract is not on the network any more: a refresh did not find it
+    on {{.Contract.MissingSince.UTC.Format "2006-01-02 15:04"}} UTC.
+    The interface below is the last one that was fetched.
+  </p>
+{{end}}
 
 {{if not .IsCurrent}}
   <p class="notice">

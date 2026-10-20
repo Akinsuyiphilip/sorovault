@@ -249,6 +249,100 @@ func TestRefreshDetectsUpgrade(t *testing.T) {
 	assert.Equal(t, "v2", current.Interface.Functions[0].Name)
 }
 
+// TestRefreshMarksAMissingContract proves that a contract which has gone
+// from the network is recorded as missing rather than failing the refresh.
+func TestRefreshMarksAMissingContract(t *testing.T) {
+	t.Parallel()
+
+	reg, fake, db := newRegistry(t)
+	fake.Deploy(idA, moduleWith(t, "hello"))
+
+	_, err := reg.Register(context.Background(), idA)
+	require.NoError(t, err)
+
+	fake.Remove(idA)
+
+	result, err := reg.Refresh(context.Background(), idA)
+	require.NoError(t, err, "a contract that is gone is not a failed refresh")
+	assert.True(t, result.Missing)
+	require.NotNil(t, result.Contract.MissingSince)
+
+	// What the registry knew about the contract is kept: it is still the
+	// best description of a contract that is no longer there.
+	current, err := db.GetSpec(context.Background(), "testnet", idA, "")
+	require.NoError(t, err)
+	assert.Equal(t, "hello", current.Interface.Functions[0].Name)
+}
+
+// TestRefreshClearsTheMissingMark proves a contract that comes back is
+// marked live again.
+func TestRefreshClearsTheMissingMark(t *testing.T) {
+	t.Parallel()
+
+	reg, fake, db := newRegistry(t)
+	fake.Deploy(idA, moduleWith(t, "hello"))
+
+	_, err := reg.Register(context.Background(), idA)
+	require.NoError(t, err)
+
+	fake.Remove(idA)
+	_, err = reg.Refresh(context.Background(), idA)
+	require.NoError(t, err)
+
+	got, err := db.GetContract(context.Background(), "testnet", idA)
+	require.NoError(t, err)
+	require.NotNil(t, got.MissingSince)
+
+	fake.Deploy(idA, moduleWith(t, "hello"))
+	_, err = reg.Refresh(context.Background(), idA)
+	require.NoError(t, err)
+
+	got, err = db.GetContract(context.Background(), "testnet", idA)
+	require.NoError(t, err)
+	assert.Nil(t, got.MissingSince, "a contract that is live again is not missing")
+}
+
+// TestRefreshDoesNotMarkOnRPCFailure proves that only a contract that is
+// really gone is marked: an RPC failure says nothing about the contract.
+func TestRefreshDoesNotMarkOnRPCFailure(t *testing.T) {
+	t.Parallel()
+
+	reg, fake, db := newRegistry(t)
+	fake.Deploy(idA, moduleWith(t, "hello"))
+
+	_, err := reg.Register(context.Background(), idA)
+	require.NoError(t, err)
+
+	fake.HashErr = errors.New("rpc down")
+
+	_, err = reg.Refresh(context.Background(), idA)
+	require.Error(t, err)
+
+	got, err := db.GetContract(context.Background(), "testnet", idA)
+	require.NoError(t, err)
+	assert.Nil(t, got.MissingSince, "an RPC error must not mark the contract missing")
+}
+
+// TestRefreshReportsThePreviousHash proves the result says what the
+// contract ran before, which is what a webhook has to report.
+func TestRefreshReportsThePreviousHash(t *testing.T) {
+	t.Parallel()
+
+	reg, fake, _ := newRegistry(t)
+	fake.Deploy(idA, moduleWith(t, "v1"))
+
+	_, err := reg.Register(context.Background(), idA)
+	require.NoError(t, err)
+
+	fake.Upgrade(idA, moduleWith(t, "v2"))
+
+	result, err := reg.Refresh(context.Background(), idA)
+	require.NoError(t, err)
+	assert.True(t, result.Changed)
+	assert.Equal(t, stellartest.HashOf(moduleWith(t, "v1")), result.PreviousWasmHash)
+	assert.Equal(t, stellartest.HashOf(moduleWith(t, "v2")), result.Contract.CurrentWasmHash)
+}
+
 func TestRefreshUnregisteredContract(t *testing.T) {
 	t.Parallel()
 

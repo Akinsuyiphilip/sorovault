@@ -51,6 +51,7 @@ func (s *Server) Routes() chi.Router {
 
 	r.Get("/contracts", s.listContracts)
 	r.Post("/contracts", s.registerContract)
+	r.Post("/contracts:batch", s.batchRegisterContracts)
 	r.Get("/wasm/{hash}", s.getWasmSpec)
 	r.Post("/wasm/{hash}", s.catalogWasm)
 	r.Get("/contracts/{id}", s.getContract)
@@ -204,8 +205,12 @@ func (s *Server) listContracts(w http.ResponseWriter, r *http.Request) {
 	filter := store.ListFilter{
 		Network: q.Get("network"),
 		Query:   q.Get("q"),
-		Limit:   intParam(q.Get("limit"), 0),
-		Offset:  intParam(q.Get("offset"), 0),
+		// The exact-name filters are repeatable, and every one of them has
+		// to match.
+		Functions: q["function"],
+		Types:     q["type"],
+		Limit:     intParam(q.Get("limit"), 0),
+		Offset:    intParam(q.Get("offset"), 0),
 	}
 	filter.Normalize()
 
@@ -266,14 +271,17 @@ func (s *Server) getContract(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, contractResponse{
-		ContractID: contract.ContractID,
-		Network:    contract.Network,
-		WasmHash:   cacheHash,
-		Name:       contract.Name,
-		FirstSeen:  contract.FirstSeen.UTC(),
-		DecodedAt:  cached.decodedAt,
-		Current:    cacheHash == contract.CurrentWasmHash,
-		Interface:  json.RawMessage(cached.body),
+		ContractID:   contract.ContractID,
+		Network:      contract.Network,
+		WasmHash:     cacheHash,
+		Name:         contract.Name,
+		SourceURL:    contract.SourceURL,
+		SourceCommit: contract.SourceCommit,
+		FirstSeen:    contract.FirstSeen.UTC(),
+		DecodedAt:    cached.decodedAt,
+		MissingSince: contract.MissingSince,
+		Current:      cacheHash == contract.CurrentWasmHash,
+		Interface:    json.RawMessage(cached.body),
 	})
 }
 
@@ -394,6 +402,96 @@ func (s *Server) registerContract(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, result)
 }
 
+// batchRegisterContracts serves POST /api/contracts:batch.
+//
+// Seeding a registry over the API would otherwise take one request per
+// contract. The contracts are registered one after another, so the batch
+// draws on the registry's concurrency budget once per contract rather than
+// all at once, and one failure does not stop the rest: every contract gets
+// a result of its own.
+func (s *Server) batchRegisterContracts(w http.ResponseWriter, r *http.Request) {
+	var req batchRegisterRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(req.ContractIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "contract_ids must not be empty")
+		return
+	}
+	if len(req.ContractIDs) > MaxBatchContracts {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"at most %d contract IDs per batch, got %d", MaxBatchContracts, len(req.ContractIDs)))
+		return
+	}
+
+	results := make([]batchResult, 0, len(req.ContractIDs))
+	for _, contractID := range req.ContractIDs {
+		if r.Context().Err() != nil {
+			// The client has gone; there is nobody left to answer.
+			return
+		}
+		results = append(results, s.registerOne(r, contractID))
+	}
+
+	response := batchResponse{Results: results}
+	for _, result := range results {
+		switch result.Status {
+		case batchStatusCreated:
+			response.Created++
+		case batchStatusUnchanged:
+			response.Unchanged++
+		case batchStatusChanged:
+			response.Changed++
+		default:
+			response.Failed++
+		}
+	}
+
+	writeJSON(w, http.StatusOK, response)
+}
+
+// registerOne registers a single contract and turns the outcome into one
+// result of a batch.
+func (s *Server) registerOne(r *http.Request, contractID string) batchResult {
+	contractID = strings.TrimSpace(contractID)
+	if contractID == "" {
+		return batchResult{
+			Status: batchStatusError,
+			Code:   http.StatusBadRequest,
+			Error:  "contract_id is required",
+		}
+	}
+
+	result, err := s.reg.Register(r.Context(), contractID)
+	if err != nil {
+		status, message := s.errorStatus(r, err)
+		return batchResult{
+			ContractID: contractID,
+			Status:     batchStatusError,
+			Code:       status,
+			Error:      message,
+		}
+	}
+
+	status := batchStatusUnchanged
+	switch {
+	case result.Created:
+		status = batchStatusCreated
+	case result.Changed:
+		status = batchStatusChanged
+	}
+
+	return batchResult{
+		ContractID: contractID,
+		Status:     status,
+		Created:    result.Created,
+		Changed:    result.Changed,
+		Contract:   &result.Contract,
+		Interface:  result.Interface,
+	}
+}
+
 // refreshContract serves POST /api/contracts/{id}/refresh.
 func (s *Server) refreshContract(w http.ResponseWriter, r *http.Request) {
 	result, err := s.reg.Refresh(r.Context(), chi.URLParam(r, "id"))
@@ -414,37 +512,47 @@ func (s *Server) network(r *http.Request) (string, error) {
 }
 
 // fail maps a domain error onto a status code and writes it.
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	if ctxErr := r.Context().Err(); ctxErr != nil && errors.Is(err, ctxErr) {
+		// The client went away; there is nobody left to read a response.
+		return
+	}
+
+	status, message := s.errorStatus(r, err)
+	if errors.Is(err, registry.ErrBusy) {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(s.reg.AcquireTimeout())))
+	}
+	writeError(w, status, message)
+}
+
+// errorStatus maps a domain error onto the status code it deserves and the
+// message that may be shown to the caller.
 //
 // Everything unrecognised becomes a 500 with a generic body, so an internal
 // failure cannot leak a connection string or query text to a caller.
-func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+func (s *Server) errorStatus(r *http.Request, err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrNotFound), errors.Is(err, stellar.ErrContractNotFound), errors.Is(err, stellar.ErrWasmNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
+		return http.StatusNotFound, err.Error()
 
 	case errors.Is(err, stellar.ErrNoWasm), errors.Is(err, spec.ErrNoSpecSection):
 		// The request was well-formed and the contract exists; it just has
 		// no interface to serve.
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return http.StatusUnprocessableEntity, err.Error()
 
 	case errors.Is(err, registry.ErrNetworkMismatch):
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return http.StatusServiceUnavailable, err.Error()
 
 	case errors.Is(err, registry.ErrBusy):
-		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(s.reg.AcquireTimeout())))
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return http.StatusServiceUnavailable, err.Error()
 
 	case isBadContractID(err), errors.Is(err, registry.ErrInvalidWasmHash):
-		writeError(w, http.StatusBadRequest, err.Error())
-
-	case errors.Is(err, r.Context().Err()) && r.Context().Err() != nil:
-		// The client went away; there is nobody left to read a response.
-		return
+		return http.StatusBadRequest, err.Error()
 
 	default:
 		s.log.ErrorContext(r.Context(), "request failed",
 			"path", r.URL.Path, "method", r.Method, "error", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
+		return http.StatusInternalServerError, "internal error"
 	}
 }
 

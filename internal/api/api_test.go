@@ -144,6 +144,26 @@ func moduleWith(t testing.TB, fnName string) []byte {
 	return wasmtest.Module(wasmtest.Section{Name: wasm.SectionContractSpec, Body: body})
 }
 
+// moduleWithStruct builds a module whose contract spec declares one
+// user-defined type, so the type filter has something to match.
+func moduleWithStruct(t testing.TB, typeName string) []byte {
+	t.Helper()
+
+	entry := xdr.ScSpecEntry{
+		Kind: xdr.ScSpecEntryKindScSpecEntryUdtStructV0,
+		UdtStructV0: &xdr.ScSpecUdtStructV0{
+			Name: typeName,
+			Fields: []xdr.ScSpecUdtStructFieldV0{
+				{Name: "amount", Type: xdr.ScSpecTypeDef{Type: xdr.ScSpecTypeScSpecTypeI128}},
+			},
+		},
+	}
+	body, err := entry.MarshalBinary()
+	require.NoError(t, err)
+
+	return wasmtest.Module(wasmtest.Section{Name: wasm.SectionContractSpec, Body: body})
+}
+
 func TestRegisterContract(t *testing.T) {
 	t.Parallel()
 
@@ -249,6 +269,157 @@ func TestRegisterContractBadRequests(t *testing.T) {
 	}
 }
 
+// TestBatchRegisterContracts proves a batch reports one result per
+// contract, and that one failure does not stop the rest.
+func TestBatchRegisterContracts(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "balance"))
+	// idB is never deployed: it fails the way a single request would.
+
+	body := `{"contract_ids":["` + idA + `","` + idB + `","not-a-contract"]}`
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	got := h.decode(t, raw)
+	results := got["results"].([]any)
+	require.Len(t, results, 3, "one result per contract, whatever happened to it")
+
+	first := results[0].(map[string]any)
+	assert.Equal(t, idA, first["contract_id"])
+	assert.Equal(t, "created", first["status"])
+	assert.True(t, first["created"].(bool))
+	assert.Equal(t, idA, first["contract"].(map[string]any)["contract_id"])
+
+	second := results[1].(map[string]any)
+	assert.Equal(t, idB, second["contract_id"])
+	assert.Equal(t, "error", second["status"])
+	assert.Equal(t, float64(http.StatusNotFound), second["code"],
+		"a failure carries the status code it would have had")
+	assert.NotEmpty(t, second["error"])
+
+	third := results[2].(map[string]any)
+	assert.Equal(t, "error", third["status"])
+	assert.Equal(t, float64(http.StatusBadRequest), third["code"],
+		"a malformed address would have been a bad request of its own")
+
+	assert.Equal(t, float64(1), got["created"])
+	assert.Equal(t, float64(0), got["unchanged"])
+	assert.Equal(t, float64(0), got["changed"])
+	assert.Equal(t, float64(2), got["failed"])
+}
+
+// TestBatchRegisterIsIdempotent proves re-registering a known contract is
+// reported as unchanged rather than as a new one.
+func TestBatchRegisterIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "balance"))
+
+	body := `{"contract_ids":["` + idA + `"]}`
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	got := h.decode(t, raw)
+	result := got["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "unchanged", result["status"])
+	assert.False(t, result["created"].(bool))
+	assert.Equal(t, float64(1), got["unchanged"])
+}
+
+// TestBatchRegisterReportsAnUpgrade proves a contract that was already
+// registered but has moved on is reported as changed.
+func TestBatchRegisterReportsAnUpgrade(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "v1"))
+
+	body := `{"contract_ids":["` + idA + `"]}`
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	h.fake.Upgrade(idA, moduleWith(t, "v2"))
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	got := h.decode(t, raw)
+	result := got["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "changed", result["status"])
+	assert.True(t, result["changed"].(bool))
+	assert.Equal(t, float64(1), got["changed"], "an upgrade is not a failure")
+	assert.Equal(t, float64(0), got["failed"])
+}
+
+// TestBatchRegisterBadRequests proves the batch is bounded, and that a
+// malformed batch is refused outright.
+func TestBatchRegisterBadRequests(t *testing.T) {
+	t.Parallel()
+
+	tooMany := make([]string, api.MaxBatchContracts+1)
+	for i := range tooMany {
+		tooMany[i] = idA
+	}
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{"empty body", "", http.StatusBadRequest},
+		{"not json", "{", http.StatusBadRequest},
+		{"no contract ids", `{"contract_ids":[]}`, http.StatusBadRequest},
+		{"unknown field", `{"contract_ids":["` + idA + `"],"extra":1}`, http.StatusBadRequest},
+		{"too many contracts", `{"contract_ids":[` + strings.Join(quoteAll(tooMany), ",") + `]}`, http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			resp, raw := h.do(t, http.MethodPost, "/api/contracts:batch", tt.body)
+			assert.Equal(t, tt.want, resp.StatusCode, string(raw))
+			assert.NotEmpty(t, h.decode(t, raw)["error"])
+		})
+	}
+}
+
+// quoteAll quotes a list of contract IDs for a JSON body.
+func quoteAll(ids []string) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = `"` + id + `"`
+	}
+	return out
+}
+
+// TestBatchRegisterCountsPerContract proves a batch draws on the registry's
+// budget once per contract, and that a busy registry refuses the contract
+// it cannot serve rather than the whole batch.
+func TestBatchRegisterCountsPerContract(t *testing.T) {
+	t.Parallel()
+
+	h := newBlockingHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "balance"))
+
+	finish := h.startRegistration(t, idA)
+	defer finish()
+
+	body := `{"contract_ids":["` + idA + `"]}`
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts:batch", body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	result := h.decode(t, raw)["results"].([]any)[0].(map[string]any)
+	assert.Equal(t, "error", result["status"])
+	assert.Equal(t, float64(http.StatusServiceUnavailable), result["code"])
+}
+
 // TestUndecodableContractIsUnprocessable separates "we could not find it"
 // from "we found it but it has no interface".
 func TestUndecodableContractIsUnprocessable(t *testing.T) {
@@ -321,6 +492,91 @@ func TestListContracts(t *testing.T) {
 		require.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, float64(store.MaxLimit), h.decode(t, raw)["limit"])
 	})
+}
+
+// TestListContractsFiltersByExactName proves the exact-name filters do
+// what they say: an exact match, repeatable, and every name has to match.
+func TestListContractsFiltersByExactName(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "transfer"))
+	h.fake.Deploy(idB, moduleWith(t, "transfer_from"))
+
+	for _, id := range []string{idA, idB} {
+		resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+id+`"}`)
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+	}
+
+	t.Run("an exact function name", func(t *testing.T) {
+		resp, raw := h.do(t, http.MethodGet, "/api/contracts?function=transfer", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+
+		got := h.decode(t, raw)
+		require.Equal(t, float64(1), got["total"])
+		contracts := got["contracts"].([]any)
+		assert.Equal(t, idA, contracts[0].(map[string]any)["contract_id"],
+			"transfer_from is not transfer")
+	})
+
+	t.Run("every requested function has to match", func(t *testing.T) {
+		resp, raw := h.do(t, http.MethodGet, "/api/contracts?function=transfer&function=transfer_from", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, float64(0), h.decode(t, raw)["total"])
+	})
+
+	t.Run("the filter combines with the query", func(t *testing.T) {
+		resp, raw := h.do(t, http.MethodGet, "/api/contracts?function=transfer&q=CDZZZPY", "")
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, float64(0), h.decode(t, raw)["total"],
+			"the query matches one contract and the function filter the other")
+	})
+}
+
+// TestListContractsFiltersByExactTypeName proves the type filter matches
+// user-defined types by their exact name.
+func TestListContractsFiltersByExactTypeName(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWithStruct(t, "Balance"))
+
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idA+`"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	resp, raw := h.do(t, http.MethodGet, "/api/contracts?type=Balance", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, float64(1), h.decode(t, raw)["total"])
+
+	resp, raw = h.do(t, http.MethodGet, "/api/contracts?type=Bal", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, float64(0), h.decode(t, raw)["total"],
+		"a type name is matched exactly, not as a prefix")
+}
+
+// TestListContractsReportsMissingContracts proves the listing says when a
+// contract went missing.
+func TestListContractsReportsMissingContracts(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.fake.Deploy(idA, moduleWith(t, "balance"))
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+idA+`"}`)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	h.fake.Remove(idA)
+	resp, raw := h.do(t, http.MethodPost, "/api/contracts/"+idA+"/refresh", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+	assert.True(t, h.decode(t, raw)["missing"].(bool))
+
+	resp, raw = h.do(t, http.MethodGet, "/api/contracts", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	contracts := h.decode(t, raw)["contracts"].([]any)
+	require.Len(t, contracts, 1)
+	contract := contracts[0].(map[string]any)
+	assert.NotEmpty(t, contract["missing_since"],
+		"the listing says when the contract went missing")
 }
 
 func TestGetContract(t *testing.T) {

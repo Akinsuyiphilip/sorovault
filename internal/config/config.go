@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ type Config struct {
 	// registered contract that has not been refreshed within it. Zero turns
 	// automatic refresh off.
 	RefreshInterval time.Duration
+	// RefreshWebhookURL, when set, is the endpoint a refresh sweep posts
+	// to whenever a contract's interface changes.
+	RefreshWebhookURL string
+	// RefreshWebhookSecret, when set, signs webhook payloads with
+	// HMAC-SHA256 so a receiver can tell them from anyone else's.
+	RefreshWebhookSecret string
 }
 
 // MinRefreshInterval is the shortest REFRESH_INTERVAL accepted. Below it a
@@ -118,6 +125,15 @@ func Load() (*Config, error) {
 	}
 	cfg.MaxConcurrentRegistrations = limit
 
+	webhookURL := strings.TrimSpace(os.Getenv("REFRESH_WEBHOOK_URL"))
+	if webhookURL != "" {
+		if err := checkWebhookURL(webhookURL); err != nil {
+			return nil, err
+		}
+	}
+	cfg.RefreshWebhookURL = webhookURL
+	cfg.RefreshWebhookSecret = os.Getenv("REFRESH_WEBHOOK_SECRET")
+
 	if cfg.DatabaseURL == "" {
 		return nil, errors.New("config: DATABASE_URL or DATABASE_URL_FILE is required")
 	}
@@ -126,6 +142,20 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// checkWebhookURL rejects a webhook address that could never be delivered
+// to. Catching it here means the mistake is reported when the process
+// starts, rather than on the first contract that gets upgraded.
+func checkWebhookURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("config: REFRESH_WEBHOOK_URL %q: %w", raw, err)
+	}
+	if !parsed.IsAbs() || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return fmt.Errorf("config: REFRESH_WEBHOOK_URL %q must be an absolute HTTP or HTTPS URL", raw)
+	}
+	return nil
 }
 
 // DatabaseURLFromEnv resolves the Postgres connection string.

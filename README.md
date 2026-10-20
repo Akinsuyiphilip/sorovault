@@ -163,6 +163,8 @@ All configuration is environment variables. Only `DATABASE_URL` (or the path in 
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `RPC_TIMEOUT` | `30s` | bound on a single contract fetch |
 | `REFRESH_INTERVAL` | `0` (off) | re-check registered contracts this often while serving; minimum `1m` |
+| `REFRESH_WEBHOOK_URL` | — | post a JSON message here whenever a refresh finds an upgraded contract |
+| `REFRESH_WEBHOOK_SECRET` | — | sign webhook payloads with HMAC-SHA256 |
 
 `NETWORK_PASSPHRASE` is a guard, not a source of truth. SoroVault reads the real
 passphrase from the RPC endpoint and refuses to proceed if the two disagree, so
@@ -181,6 +183,64 @@ A contract that fails to refresh — expired, or an RPC error — is logged and
 skipped, and the sweep carries on. One sweep runs at startup and then one per
 interval; a sweep in progress at shutdown is cancelled before the database is
 closed.
+
+### Telling the world about an upgrade
+
+Set `REFRESH_WEBHOOK_URL` and every contract whose interface changes during a
+sweep is posted to it, one message per contract:
+
+```json
+{
+  "contract_id": "CDZZ…4PAN",
+  "network": "testnet",
+  "old_wasm_hash": "c618da…0781",
+  "new_wasm_hash": "9f2b71…4c3a",
+  "interface_url": "/api/contracts/CDZZ…4PAN?network=testnet&wasm_hash=9f2b71…4c3a",
+  "changed_at": "2026-08-07T12:00:00Z"
+}
+```
+
+`interface_url` is a path, not an absolute URL: the instance does not know
+the address it is served under, so it says where the interface is and lets
+the receiver put its own prefix on it.
+
+Delivery is best effort. The webhook is posted to once, with a five-second
+timeout and no retries: a receiver that is down must not be able to stall the
+sweep, and the sweep's job is to keep the registry up to date rather than to
+keep a receiver informed. A delivery that fails is logged.
+
+Set `REFRESH_WEBHOOK_SECRET` to sign the payloads. The signature is the
+HMAC-SHA256 of the raw request body, keyed with the secret, hex-encoded and
+sent in the `X-SoroVault-Signature` header:
+
+```
+X-SoroVault-Signature: sha256=6f3a…
+```
+
+A receiver recomputes it over the body it received and compares the two in
+constant time. A mismatch means the payload was tampered with, or did not
+come from SoroVault at all.
+
+### Contracts that left the network
+
+A contract instance expires once it has not been used for a while. When a
+refresh cannot find a contract, the registry records when it first noticed —
+`missing_since` — rather than failing the refresh and losing what it knew:
+
+```json
+{
+  "contract_id": "CDZZ…4PAN",
+  "network": "testnet",
+  "current_wasm_hash": "c618da…0781",
+  "missing_since": "2026-08-07T12:00:00Z"
+}
+```
+
+The interface is still served — it is the best description of a contract that
+is no longer there — and the browse UI marks the contract as missing. A
+contract that comes back is marked live again, and the mark is cleared. A
+sweep counts a missing contract apart from a failure, and says so once, when
+it happens, rather than on every sweep.
 
 ### Bounded registrations
 
@@ -214,8 +274,9 @@ stale.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/contracts` | list contracts — `?q=`, `?network=`, `?limit=`, `?offset=` |
+| `GET` | `/api/contracts` | list contracts — `?q=`, `?function=`, `?type=`, `?network=`, `?limit=`, `?offset=` |
 | `POST` | `/api/contracts` | register a contract — `{"contract_id": "C…"}` |
+| `POST` | `/api/contracts:batch` | register up to 20 contracts in one request — `{"contract_ids": ["C…", "C…"]}` |
 | `POST` | `/api/wasm/{hash}` | catalog uploaded code before a contract runs it |
 | `GET` | `/api/wasm/{hash}` | read a catalogued uploaded-code interface — `?network=` |
 | `GET` | `/api/contracts/{id}` | the decoded ABI — `?network=`, `?wasm_hash=` |
@@ -231,6 +292,30 @@ stale.
 it was already registered, so it is safe to retry. Passing `?wasm_hash=` to a
 read selects a superseded version instead of the current one.
 
+**Batches.** `POST /api/contracts:batch` registers up to 20 contracts in one
+request, which is how a tool seeds a whole deployment without making twenty
+requests. The contracts are processed one after another, so the batch draws on
+the registry's concurrency budget once per contract rather than all at once,
+and one failure does not stop the rest. Every contract gets a result of its
+own:
+
+```json
+{
+  "results": [
+    { "contract_id": "CDZZ…4PAN", "status": "created", "created": true, "changed": true, "contract": {…}, "interface": {…} },
+    { "contract_id": "CDZZ…2V", "status": "error", "created": false, "changed": false,
+      "error": "stellar: contract not found on network: CDZZ…2V", "code": 404 }
+  ],
+  "created": 1, "unchanged": 0, "changed": 0, "failed": 1
+}
+```
+
+`status` is `created`, `unchanged`, `changed` (already registered, but
+upgraded since it was last fetched) or `error`. A failure carries the status
+code the contract would have had on a request of its own. The request itself
+is bounded at 20 contract IDs, which is about 40 RPC round trips: enough to
+seed a deployment, few enough to finish inside the server's request timeout.
+
 **Search.** `?q=` is a case-insensitive substring match against the contract
 ID, its name, and the names of every function, type and event in the
 contract's **current** interface — so `?q=transfer` finds every token-like
@@ -243,6 +328,22 @@ contract in the registry. When a symbol matched, the listing says which:
 A function removed by an upgrade stops matching; older versions stay
 retrievable by hash but are not searched.
 
+**Exact names.** `?q=` is a substring, so `?q=transfer` also finds
+`transfer_from` and `transferable`. When a tool wants the contracts that
+implement an interface, it wants the names to match exactly:
+
+```
+GET /api/contracts?function=transfer&function=balance
+GET /api/contracts?type=Balance
+```
+
+`?function=` matches a function of that exact name, `?type=` a user-defined
+type (struct, union, enum or error enum) of that exact name. Both are
+repeatable, and every name has to match: two `?function=` parameters ask for
+a contract with both functions. The names are matched case-sensitively, since
+an interface is spelled a particular way. The filters combine with `?q=` and
+`?network=`, and all of them have to match.
+
 Status codes worth knowing: **422** means the contract exists but has no
 interface to serve (a Stellar asset contract, or a module with no spec section),
 as distinct from **404**, which means it is not there at all.
@@ -252,7 +353,7 @@ as distinct from **404**, which means it is not there at all.
 ```console
 sorovault add <contract_id>...      # fetch, decode and register
 sorovault refresh <contract_id>...  # re-check for an upgraded interface
-sorovault list                      # -q, --network, --limit, --offset
+sorovault list                      # -q, --function, --type, --network, --limit, --offset
 sorovault get <contract_id>         # --function, --wasm-hash, --json
 sorovault codegen <contract_id>     # --lang ts|md; -o, --wasm-hash
 sorovault serve                     # JSON API + browse UI
@@ -261,8 +362,9 @@ sorovault doctor                    # check a deployment's health
 ```
 
 `add` and `refresh` accept several contract IDs and report per-contract
-failures without abandoning the rest. Every read command takes `--json`, which
-emits exactly what the API serves:
+failures without abandoning the rest. `list` takes `--function` and `--type`
+for the same exact-name filters the API offers. Every read command takes
+`--json`, which emits exactly what the API serves:
 
 ```console
 $ sorovault get CDZZ…4PAN --function has_voted
@@ -472,10 +574,11 @@ why the whole stack can be tested without a network or a database.
 
 ```
 contracts (network, contract_id)  PK
-  current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed
+  current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed,
+  missing_since
 
 specs     (network, contract_id, wasm_hash)  UNIQUE
-  spec jsonb, decoded_at
+  spec jsonb, decoded_at, symbols
 
 wasm_specs (network, wasm_hash)  PK
   spec jsonb, decoded_at

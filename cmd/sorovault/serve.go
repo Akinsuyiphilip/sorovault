@@ -71,9 +71,15 @@ func startRefresher(ctx context.Context, a *app) (stop func(), err error) {
 		return func() {}, nil
 	}
 
+	notifier, err := refreshNotifier(a)
+	if err != nil {
+		return nil, err
+	}
+
 	r, err := refresher.New(a.registry, refresher.Options{
 		Interval: a.cfg.RefreshInterval,
 		Timeout:  a.cfg.RPCTimeout,
+		Notifier: notifier,
 		Logger:   a.log.With("component", "refresher"),
 	})
 	if err != nil {
@@ -92,6 +98,26 @@ func startRefresher(ctx context.Context, a *app) (stop func(), err error) {
 		cancel()
 		<-done
 	}, nil
+}
+
+// refreshNotifier builds the webhook a sweep posts upgrades to, if one is
+// configured.
+func refreshNotifier(a *app) (refresher.Notifier, error) {
+	if a.cfg.RefreshWebhookURL == "" {
+		return nil, nil
+	}
+
+	webhook, err := refresher.NewWebhook(refresher.WebhookOptions{
+		URL:    a.cfg.RefreshWebhookURL,
+		Secret: a.cfg.RefreshWebhookSecret,
+		Logger: a.log.With("component", "refresher-webhook"),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	a.log.Info("refresh webhook enabled", "url", a.cfg.RefreshWebhookURL)
+	return webhook, nil
 }
 
 // newRouter assembles the JSON API, the browse UI and the health endpoint

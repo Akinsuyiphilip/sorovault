@@ -32,6 +32,8 @@
         "operationId": "listContracts",
         "parameters": [
           { "name": "q", "in": "query", "description": "Case-insensitive substring of the contract ID, its name, or a function, type or event name in its current interface.", "schema": { "type": "string" } },
+          { "name": "function", "in": "query", "description": "Only contracts whose current interface declares a function with exactly this name. Repeatable; every name must match. Case-sensitive.", "schema": { "type": "array", "items": { "type": "string" } }, "style": "form", "explode": true },
+          { "name": "type", "in": "query", "description": "Only contracts whose current interface declares a user-defined type with exactly this name. Repeatable; every name must match. Case-sensitive.", "schema": { "type": "array", "items": { "type": "string" } }, "style": "form", "explode": true },
           { "$ref": "#/components/parameters/network" },
           { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
           { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
@@ -61,6 +63,26 @@
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" },
           "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/api/contracts:batch": {
+      "post": {
+        "summary": "Register several contracts in one request",
+        "description": "Registers up to 20 contracts, one after another, and reports one result per contract. The contracts are processed sequentially, so the batch draws on the registry's concurrency budget once per contract rather than all at once, and one failure does not stop the rest: every contract gets a result of its own, with the status code it would have had on its own request.",
+        "operationId": "batchRegisterContracts",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "properties": { "contract_ids": { "type": "array", "items": { "$ref": "#/components/schemas/ContractID" }, "minItems": 1, "maxItems": 20 } },
+            "required": ["contract_ids"],
+            "additionalProperties": false
+          }, "examples": { "two": { "value": { "contract_ids": ["CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN", "CDZZZPYQALFRBQAZD5KCW2SZK4ZF455PJVD7H53AGHXTWAJO4BYVPP2V"] } } } } }
+        },
+        "responses": {
+          "200": { "description": "Every contract was processed; each result says what became of it.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BatchRegisterResult" }, "examples": { "mixed": { "$ref": "#/components/examples/BatchRegisterResult" } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
         }
       }
     },
@@ -299,6 +321,41 @@
           "decoded_at": "2026-08-07T12:00:00Z",
           "current": true
         }]
+      } },
+      "BatchRegisterResult": { "value": {
+        "results": [
+          {
+            "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+            "status": "created",
+            "created": true,
+            "changed": true,
+            "contract": {
+              "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+              "network": "testnet",
+              "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+              "first_seen": "2026-08-07T12:00:00Z",
+              "last_refreshed": "2026-08-07T12:00:00Z"
+            },
+            "interface": {
+              "abi_version": "1",
+              "functions": [{ "name": "has_voted", "inputs": [{ "name": "nullifier", "type": { "kind": "bytes_n", "display": "BytesN<32>", "n": 32 } }], "outputs": [{ "kind": "bool", "display": "bool" }] }],
+              "types": { "structs": [], "unions": [], "enums": [], "error_enums": [] },
+              "events": []
+            }
+          },
+          {
+            "contract_id": "CDZZZPYQALFRBQAZD5KCW2SZK4ZF455PJVD7H53AGHXTWAJO4BYVPP2V",
+            "status": "error",
+            "created": false,
+            "changed": false,
+            "error": "stellar: contract not found on network: CDZZZPYQALFRBQAZD5KCW2SZK4ZF455PJVD7H53AGHXTWAJO4BYVPP2V",
+            "code": 404
+          }
+        ],
+        "created": 1,
+        "unchanged": 0,
+        "changed": 0,
+        "failed": 1
       } }
     },
     "schemas": {
@@ -316,6 +373,7 @@
           "source_commit": { "type": "string" },
           "first_seen": { "type": "string", "format": "date-time" },
           "last_refreshed": { "type": "string", "format": "date-time" },
+          "missing_since": { "type": "string", "format": "date-time", "description": "When a refresh last found the contract absent from the network. Absent while the contract is live." },
           "matches": { "type": "array", "items": { "type": "string" }, "description": "Interface symbols a search query matched. Only present on search results." }
         },
         "required": ["contract_id", "network", "current_wasm_hash", "first_seen", "last_refreshed"]
@@ -336,9 +394,36 @@
           "contract": { "$ref": "#/components/schemas/Contract" },
           "interface": { "$ref": "#/components/schemas/Interface" },
           "created": { "type": "boolean" },
-          "changed": { "type": "boolean", "description": "A new interface version was recorded." }
+          "changed": { "type": "boolean", "description": "A new interface version was recorded." },
+          "previous_wasm_hash": { "$ref": "#/components/schemas/WasmHash", "description": "The hash the contract ran before the change. Absent when nothing changed." },
+          "missing": { "type": "boolean", "description": "The contract could not be found on the network. Its record is kept and marked as missing rather than the call failing." }
         },
         "required": ["contract", "created", "changed"]
+      },
+      "BatchRegisterResult": {
+        "type": "object",
+        "properties": {
+          "results": { "type": "array", "items": { "$ref": "#/components/schemas/BatchResult" } },
+          "created": { "type": "integer", "description": "How many contracts were new to the registry." },
+          "unchanged": { "type": "integer", "description": "How many were already registered and unchanged." },
+          "changed": { "type": "integer", "description": "How many were already registered but have been upgraded." },
+          "failed": { "type": "integer", "description": "How many could not be registered." }
+        },
+        "required": ["results", "created", "unchanged", "changed", "failed"]
+      },
+      "BatchResult": {
+        "type": "object",
+        "properties": {
+          "contract_id": { "type": "string", "description": "The contract this result is about. It is echoed as sent, since a bad address has no canonical form." },
+          "status": { "enum": ["created", "unchanged", "changed", "error"], "description": "created: new to the registry. unchanged: already registered and the same. changed: already registered but upgraded. error: it could not be registered." },
+          "created": { "type": "boolean" },
+          "changed": { "type": "boolean" },
+          "contract": { "$ref": "#/components/schemas/Contract" },
+          "interface": { "$ref": "#/components/schemas/Interface" },
+          "error": { "type": "string", "description": "Why the contract could not be registered." },
+          "code": { "type": "integer", "description": "The status code the contract would have had on its own request." }
+        },
+        "required": ["contract_id", "status", "created", "changed"]
       },
       "SourceRequest": {
         "type": "object",
@@ -376,6 +461,7 @@
           "source_commit": { "type": "string" },
           "first_seen": { "type": "string", "format": "date-time" },
           "decoded_at": { "type": "string", "format": "date-time" },
+          "missing_since": { "type": "string", "format": "date-time", "description": "When a refresh last found the contract absent from the network. Absent while the contract is live." },
           "current": { "type": "boolean", "description": "False when an older version was requested with wasm_hash." },
           "interface": { "$ref": "#/components/schemas/Interface" }
         },

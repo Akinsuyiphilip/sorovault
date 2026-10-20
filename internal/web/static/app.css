@@ -6,6 +6,8 @@
   --line: #e2e2dd;
   --accent: #1f6f5c;
   --accent-soft: #e6f1ed;
+  --missing: #a33f52;
+  --missing-soft: #fbecee;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -18,6 +20,8 @@
     --line: #2e312d;
     --accent: #6fcfae;
     --accent-soft: #23302b;
+    --missing: #f095a4;
+    --missing-soft: #2f2224;
   }
 }
 
@@ -268,6 +272,19 @@ table { width: 100%; border-collapse: collapse; }
 }
 
 .badge.current { font-weight: 600; }
+
+.badge.missing {
+  margin-left: .35rem;
+  background: var(--missing-soft);
+  color: var(--missing);
+  font-weight: 600;
+}
+
+.notice.missing {
+  border-left-color: var(--missing);
+  background: var(--missing-soft);
+  color: var(--missing);
+}
 
 .count-badge {
   font-size: .72rem;

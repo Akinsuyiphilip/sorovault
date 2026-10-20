@@ -136,6 +136,9 @@ func (m *Memory) Save(ctx context.Context, c Contract, iface *model.Interface) e
 		c.FirstSeen = now
 	}
 	c.LastRefreshed = now
+	// A saved interface means the contract was live, so it is not missing
+	// any more.
+	c.MissingSince = nil
 	m.contracts[k] = c
 
 	for i := range m.specs[k] {
@@ -154,6 +157,29 @@ func (m *Memory) Save(ctx context.Context, c Contract, iface *model.Interface) e
 		Interface:  cloned,
 		DecodedAt:  now,
 	})
+	return nil
+}
+
+// MarkMissing records that a contract could not be found on the network.
+func (m *Memory) MarkMissing(ctx context.Context, network, contractID string, since time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := key(network, contractID)
+	c, ok := m.contracts[k]
+	if !ok {
+		return fmt.Errorf("%w: contract %s on %s", ErrNotFound, contractID, network)
+	}
+	// The first sighting is the one that matters: a contract that stays
+	// missing keeps the timestamp of when it went away.
+	if c.MissingSince == nil {
+		stamp := since.UTC()
+		c.MissingSince = &stamp
+		m.contracts[k] = c
+	}
 	return nil
 }
 
@@ -188,7 +214,18 @@ func (m *Memory) GetContract(ctx context.Context, network, contractID string) (*
 	if !ok {
 		return nil, fmt.Errorf("%w: contract %s on %s", ErrNotFound, contractID, network)
 	}
+	c.MissingSince = copyMissing(c.MissingSince)
 	return &c, nil
+}
+
+// copyMissing returns an independent copy of a missing mark, so that a
+// caller cannot change what the store holds through the pointer.
+func copyMissing(since *time.Time) *time.Time {
+	if since == nil {
+		return nil
+	}
+	out := *since
+	return &out
 }
 
 // ListNetworks returns the distinct networks represented in the registry.
@@ -237,6 +274,12 @@ func (m *Memory) ListContracts(ctx context.Context, f ListFilter) (*ContractPage
 				continue
 			}
 		}
+		if len(f.Functions) > 0 || len(f.Types) > 0 {
+			if !hasAll(m.currentInterface(k, c.CurrentWasmHash), f.Functions, f.Types) {
+				continue
+			}
+		}
+		c.MissingSince = copyMissing(c.MissingSince)
 		matched = append(matched, c)
 	}
 
@@ -264,6 +307,17 @@ func (m *Memory) currentSymbols(k, wasmHash string) string {
 		}
 	}
 	return ""
+}
+
+// currentInterface returns the decoded interface of the spec a contract
+// currently runs. The caller holds m.mu.
+func (m *Memory) currentInterface(k, wasmHash string) *model.Interface {
+	for _, s := range m.specs[k] {
+		if s.WasmHash == wasmHash {
+			return s.Interface
+		}
+	}
+	return nil
 }
 
 // GetSpec returns a stored interface, defaulting to the contract's current
