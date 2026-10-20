@@ -15,6 +15,8 @@
 #   - those checks ran after main's current head commit, so they tested the
 #     PR against the code it would actually merge into;
 #   - GitHub reports it mergeable with no conflicts.
+#   - main's .github/scripts/malware-scan.sh finds nothing in what the PR
+#     adds (blocking patterns and anything needing human review both hold).
 #
 # Anything else is left for a maintainer, with one explanatory comment and a
 # label, so the author knows why. At most one PR is merged per run, because a
@@ -193,6 +195,38 @@ Passing CI cannot show that removed tests were safe to remove, so a maintainer w
   state=$(gh pr view "$pr" -R "$repo" --json mergeable,mergeStateStatus --jq '"\(.mergeable) \(.mergeStateStatus)"')
   if [ "${state%% *}" != MERGEABLE ]; then
     log "  skip: not mergeable ($state)"; continue
+  fi
+
+  # Last gate: main's malware scanner over exactly the commit about to be
+  # merged. The PR's own malware-scan check already ran, but this copy of the
+  # rules comes from main and the PR cannot have changed it. Nothing from the
+  # PR is executed; its commits are only read through git.
+  if [ -f .github/scripts/malware-scan.sh ]; then
+    git fetch -q --no-tags origin main || true
+    if ! git fetch -q --no-tags origin "+refs/pull/$pr/head:refs/automerge/pr-$pr" ||
+       ! git cat-file -e "$sha^{commit}" 2>/dev/null; then
+      log "  wait: could not fetch $sha for the malware scan"; continue
+    fi
+    set +e
+    scan=$(bash .github/scripts/malware-scan.sh "$main_sha" "$sha" .github/malware-scan-allow 2>&1)
+    scan_rc=$?
+    set -e
+    if [ "$scan_rc" -ge 3 ]; then
+      log "  wait: malware scan could not run (exit $scan_rc)"; continue
+    fi
+    if [ "$scan_rc" -ne 0 ]; then
+      case "$scan_rc" in
+        1) reason="malware-blocked"; what="patterns that indicate malware or code injection" ;;
+        2) reason="security-review"; what="code a maintainer must review before it can merge (process execution, new dependencies, raw network access or similar)" ;;
+      esac
+      hold "$pr" "$hold_label" "$reason" "Auto-merge skipped this PR because the malware scan found $what:
+
+\`\`\`text
+$(grep -v '^::' <<<"$scan" | head -40)
+\`\`\`
+A maintainer will review it."
+      continue
+    fi
   fi
 
   if [ "$dry_run" = true ]; then
