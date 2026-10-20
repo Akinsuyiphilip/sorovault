@@ -41,10 +41,22 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 
-	return newHarnessWithStore(t, stellartest.New(), store.NewMemory())
+	return newHarnessWith(t, registry.Options{})
+}
+
+func newHarnessWith(t *testing.T, opts registry.Options) *harness {
+	t.Helper()
+
+	return newHarnessWithOptions(t, stellartest.New(), store.NewMemory(), opts)
 }
 
 func newHarnessWithStore(t *testing.T, fake *stellartest.Fake, db store.Store) *harness {
+	t.Helper()
+
+	return newHarnessWithOptions(t, fake, db, registry.Options{})
+}
+
+func newHarnessWithOptions(t *testing.T, fake *stellartest.Fake, db store.Store, opts registry.Options) *harness {
 	t.Helper()
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))

@@ -1,5 +1,6 @@
 {
   "openapi": "3.1.0",
+  "servers": [{ "url": "/" }],
   "info": {
     "title": "SoroVault",
     "summary": "A contract interface (ABI) registry for Stellar/Soroban.",
@@ -20,7 +21,7 @@
               "type": "object",
               "properties": { "status": { "const": "ok" }, "version": { "type": "string" } },
               "required": ["status", "version"]
-            } } }
+            }, "examples": { "live": { "$ref": "#/components/examples/Liveness" } } } }
           }
         }
       }
@@ -36,7 +37,7 @@
           { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
         ],
         "responses": {
-          "200": { "description": "One page of contracts.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContractList" } } } },
+          "200": { "description": "One page of contracts.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContractList" }, "examples": { "zkvote": { "$ref": "#/components/examples/ContractList" } } } } },
           "503": { "$ref": "#/components/responses/ServiceUnavailable" }
         }
       },
@@ -51,11 +52,11 @@
             "properties": { "contract_id": { "$ref": "#/components/schemas/ContractID" } },
             "required": ["contract_id"],
             "additionalProperties": false
-          } } }
+          }, "examples": { "zkvote": { "value": { "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN" } } } } }
         },
         "responses": {
-          "201": { "description": "Newly registered.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" } } } },
-          "200": { "description": "Already registered; re-verified.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" } } } },
+          "201": { "description": "Newly registered.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" }, "examples": { "zkvote": { "$ref": "#/components/examples/RegisterResult" } } } } },
+          "200": { "description": "Already registered; re-verified.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" }, "examples": { "zkvote": { "$ref": "#/components/examples/ExistingRegisterResult" } } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" },
@@ -73,7 +74,7 @@
           { "$ref": "#/components/parameters/wasmHash" }
         ],
         "responses": {
-          "200": { "description": "The interface.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContractInterface" } } } },
+          "200": { "description": "The interface.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContractInterface" }, "examples": { "zkvote": { "$ref": "#/components/examples/ContractInterface" } } } } },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -126,7 +127,7 @@
           { "$ref": "#/components/parameters/wasmHash" }
         ],
         "responses": {
-          "200": { "description": "The function.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FunctionDetail" } } } },
+          "200": { "description": "The function.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FunctionDetail" }, "examples": { "hasVoted": { "$ref": "#/components/examples/FunctionDetail" } } } } },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -153,7 +154,7 @@
         "operationId": "listVersions",
         "parameters": [{ "$ref": "#/components/parameters/id" }, { "$ref": "#/components/parameters/network" }],
         "responses": {
-          "200": { "description": "The versions.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionList" } } } },
+          "200": { "description": "The versions.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/VersionList" }, "examples": { "zkvote": { "$ref": "#/components/examples/VersionList" } } } } },
           "404": { "$ref": "#/components/responses/NotFound" }
         }
       }
@@ -164,7 +165,7 @@
         "operationId": "refreshContract",
         "parameters": [{ "$ref": "#/components/parameters/id" }],
         "responses": {
-          "200": { "description": "Refreshed. `changed` is true when a new interface version was recorded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" } } } },
+          "200": { "description": "Refreshed. `changed` is true when a new interface version was recorded.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RegisterResult" }, "examples": { "unchanged": { "$ref": "#/components/examples/ExistingRegisterResult" } } } } },
           "400": { "$ref": "#/components/responses/BadRequest" },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" },
@@ -184,7 +185,7 @@
           { "name": "download", "in": "query", "description": "Any value sets Content-Disposition: attachment.", "schema": { "type": "string" } }
         ],
         "responses": {
-          "200": { "description": "TypeScript source.", "content": { "text/plain": { "schema": { "type": "string" } } } },
+          "200": { "description": "TypeScript source.", "content": { "text/plain": { "schema": { "type": "string" }, "example": "export const contractId = \\\"CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN\\\";\\nexport const wasmHash = \\\"c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781\\\";\\n" } } },
           "404": { "$ref": "#/components/responses/NotFound" },
           "422": { "$ref": "#/components/responses/NoInterface" }
         }
@@ -194,7 +195,7 @@
       "get": {
         "summary": "This document",
         "operationId": "getOpenAPI",
-        "responses": { "200": { "description": "The OpenAPI document.", "content": { "application/json": { "schema": { "type": "object" } } } } }
+        "responses": { "200": { "description": "The OpenAPI document.", "content": { "application/json": { "schema": { "type": "object" }, "example": { "openapi": "3.1.0", "info": { "title": "SoroVault", "version": "1" } } } } } }
       }
     }
   },
@@ -216,6 +217,89 @@
         },
         "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
       }
+    },
+    "examples": {
+      "Liveness": { "value": { "status": "ok", "version": "dev" } },
+      "ContractList": { "value": {
+        "contracts": [{
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "first_seen": "2026-08-07T12:00:00Z",
+          "last_refreshed": "2026-08-07T12:00:00Z"
+        }],
+        "total": 1,
+        "limit": 50,
+        "offset": 0
+      } },
+      "RegisterResult": { "value": {
+        "contract": {
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "first_seen": "2026-08-07T12:00:00Z",
+          "last_refreshed": "2026-08-07T12:00:00Z"
+        },
+        "interface": {
+          "abi_version": "1",
+          "functions": [{ "name": "has_voted", "inputs": [{ "name": "nullifier", "type": { "kind": "bytes_n", "display": "BytesN<32>", "n": 32 } }], "outputs": [{ "kind": "bool", "display": "bool" }] }],
+          "types": { "structs": [], "unions": [], "enums": [], "error_enums": [] },
+          "events": []
+        },
+        "created": true,
+        "changed": false
+      } },
+      "ExistingRegisterResult": { "value": {
+        "contract": {
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "first_seen": "2026-08-07T12:00:00Z",
+          "last_refreshed": "2026-08-07T12:00:00Z"
+        },
+        "interface": {
+          "abi_version": "1",
+          "functions": [{ "name": "has_voted", "inputs": [{ "name": "nullifier", "type": { "kind": "bytes_n", "display": "BytesN<32>", "n": 32 } }], "outputs": [{ "kind": "bool", "display": "bool" }] }],
+          "types": { "structs": [], "unions": [], "enums": [], "error_enums": [] },
+          "events": []
+        },
+        "created": false,
+        "changed": false
+      } },
+      "ContractInterface": { "value": {
+        "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+        "network": "testnet",
+        "wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+        "first_seen": "2026-08-07T12:00:00Z",
+        "decoded_at": "2026-08-07T12:00:00Z",
+        "current": true,
+        "interface": {
+          "abi_version": "1",
+          "functions": [{ "name": "has_voted", "inputs": [{ "name": "nullifier", "type": { "kind": "bytes_n", "display": "BytesN<32>", "n": 32 } }], "outputs": [{ "kind": "bool", "display": "bool" }] }],
+          "types": { "structs": [], "unions": [], "enums": [], "error_enums": [] },
+          "events": []
+        }
+      } },
+      "FunctionDetail": { "value": {
+        "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+        "network": "testnet",
+        "wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+        "signature": "fn has_voted(nullifier: BytesN<32>) -> bool",
+        "function": {
+          "name": "has_voted",
+          "inputs": [{ "name": "nullifier", "type": { "kind": "bytes_n", "display": "BytesN<32>", "n": 32 } }],
+          "outputs": [{ "kind": "bool", "display": "bool" }]
+        }
+      } },
+      "VersionList": { "value": {
+        "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+        "network": "testnet",
+        "versions": [{
+          "wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "decoded_at": "2026-08-07T12:00:00Z",
+          "current": true
+        }]
+      } }
     },
     "schemas": {
       "ContractID": { "type": "string", "pattern": "^C[A-Z2-7]{55}$", "description": "Strkey contract address." },

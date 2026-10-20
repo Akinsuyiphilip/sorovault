@@ -8,6 +8,7 @@ package api
 
 import (
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -427,6 +428,10 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 
 	case errors.Is(err, registry.ErrNetworkMismatch):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+
+	case errors.Is(err, registry.ErrBusy):
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(s.reg.AcquireTimeout())))
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 
 	case isBadContractID(err), errors.Is(err, registry.ErrInvalidWasmHash):

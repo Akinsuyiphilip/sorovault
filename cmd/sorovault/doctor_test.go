@@ -15,6 +15,7 @@ import (
 
 	"github.com/soroworks/sorovault/internal/config"
 	"github.com/soroworks/sorovault/internal/stellar"
+	"github.com/soroworks/sorovault/internal/store"
 )
 
 // healthyDoctorDeps returns dependencies whose every check passes.
@@ -274,7 +275,9 @@ func TestDoctorDoesNotModifyTheDatabase(t *testing.T) {
 		}
 	}
 	assert.False(t, migrations.OK, "an empty schema is behind the latest migration")
-	assert.Contains(t, migrations.Error, "version 2 is available")
+	latest, err := store.LatestMigrationVersion()
+	require.NoError(t, err)
+	assert.Contains(t, migrations.Error, fmt.Sprintf("version %d is available", latest))
 
 	after := tableCounts(t, scoped)
 	assert.Equal(t, before, after, "the doctor must not change the database")

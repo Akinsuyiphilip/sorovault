@@ -18,11 +18,22 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/soroworks/sorovault/internal/model"
 	"github.com/soroworks/sorovault/internal/spec"
 	"github.com/soroworks/sorovault/internal/stellar"
 	"github.com/soroworks/sorovault/internal/store"
 )
+
+const (
+	// DefaultMaxConcurrent is the registration concurrency limit when none is configured.
+	DefaultMaxConcurrent = 4
+	// DefaultAcquireTimeout is how long a registration waits for an available slot.
+	DefaultAcquireTimeout = 2 * time.Second
+)
+
+var ErrBusy = errors.New("registry: too many registrations in flight")
 
 // ErrNetworkMismatch reports that the RPC endpoint serves a different
 // network than the one configured. Continuing would file records under the
