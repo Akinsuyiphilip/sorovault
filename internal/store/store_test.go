@@ -633,6 +633,100 @@ func runStoreSuite(t *testing.T, newStore factory) {
 		require.NoError(t, err)
 		assert.Equal(t, workers, page.Total)
 	})
+
+	t.Run("stats count contracts and versions per network", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		empty, err := s.Stats(ctx)
+		require.NoError(t, err)
+		assert.Empty(t, empty.Networks)
+		assert.Zero(t, empty.Contracts)
+		assert.Zero(t, empty.Versions)
+		assert.Nil(t, empty.Latest)
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("f")))
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h2"), iface("g")))
+
+		// Sleep so first_seen orders the two registrations unambiguously;
+		// both stores timestamp with the database or wall clock.
+		time.Sleep(5 * time.Millisecond)
+		require.NoError(t, s.Save(ctx, contract(idB, "public", "h3"), iface("f")))
+
+		stats, err := s.Stats(ctx)
+		require.NoError(t, err)
+		assert.Equal(t, 2, stats.Contracts)
+		assert.Equal(t, 3, stats.Versions, "a superseded interface still counts as a stored version")
+
+		require.Len(t, stats.Networks, 2)
+		assert.Equal(t, store.NetworkStats{Network: "public", Contracts: 1, Versions: 1}, stats.Networks[0])
+		assert.Equal(t, store.NetworkStats{Network: "testnet", Contracts: 1, Versions: 2}, stats.Networks[1],
+			"networks are ordered by name")
+
+		require.NotNil(t, stats.Latest)
+		assert.Equal(t, idB, stats.Latest.ContractID,
+			"the most recently registered contract, not the most recently refreshed")
+	})
+
+	t.Run("upgrade feed excludes registrations and pages newest first", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "a1"), iface("f")))
+		time.Sleep(2 * time.Millisecond)
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "a2"), iface("f")))
+		time.Sleep(2 * time.Millisecond)
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "b1"), iface("f")))
+		time.Sleep(2 * time.Millisecond)
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "b2"), iface("f")))
+		time.Sleep(2 * time.Millisecond)
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "b3"), iface("f")))
+
+		page, err := s.ListUpgrades(ctx, store.UpgradeFilter{})
+		require.NoError(t, err)
+		require.Equal(t, 3, page.Total, "each contract's first version is a registration, not an upgrade")
+		require.Len(t, page.Upgrades, 3)
+
+		assert.Equal(t, store.Upgrade{
+			ContractID:  idB,
+			Network:     "testnet",
+			OldWasmHash: "b2",
+			NewWasmHash: "b3",
+			ObservedAt:  page.Upgrades[0].ObservedAt,
+		}, page.Upgrades[0])
+		assert.Equal(t, idB, page.Upgrades[1].ContractID)
+		assert.Equal(t, idA, page.Upgrades[2].ContractID, "a2 is the oldest upgrade")
+
+		first, err := s.ListUpgrades(ctx, store.UpgradeFilter{Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, first.Upgrades, 1)
+		assert.Equal(t, 3, first.Total)
+		assert.Equal(t, "b3", first.Upgrades[0].NewWasmHash)
+
+		second, err := s.ListUpgrades(ctx, store.UpgradeFilter{Limit: 1, Offset: 1})
+		require.NoError(t, err)
+		require.Len(t, second.Upgrades, 1)
+		assert.Equal(t, "b2", second.Upgrades[0].NewWasmHash)
+
+		past, err := s.ListUpgrades(ctx, store.UpgradeFilter{Offset: 99})
+		require.NoError(t, err)
+		assert.Empty(t, past.Upgrades)
+		assert.Equal(t, 3, past.Total, "paging past the end still reports the true total")
+
+		public, err := s.ListUpgrades(ctx, store.UpgradeFilter{Network: "public"})
+		require.NoError(t, err)
+		assert.Zero(t, public.Total)
+		assert.Empty(t, public.Upgrades)
+
+		require.NoError(t, s.Save(ctx, contract(idA, "public", "p1"), iface("f")))
+		require.NoError(t, s.Save(ctx, contract(idA, "public", "p2"), iface("f")))
+
+		public, err = s.ListUpgrades(ctx, store.UpgradeFilter{Network: "public"})
+		require.NoError(t, err)
+		require.Equal(t, 1, public.Total)
+		assert.Equal(t, "p1", public.Upgrades[0].OldWasmHash)
+		assert.Equal(t, "p2", public.Upgrades[0].NewWasmHash)
+	})
 }
 
 func TestListFilterNormalize(t *testing.T) {

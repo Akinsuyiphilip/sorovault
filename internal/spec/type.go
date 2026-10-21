@@ -9,10 +9,12 @@ import (
 	"github.com/soroworks/sorovault/internal/model"
 )
 
-// maxTypeDepth bounds how deeply nested a type may be before conversion
-// gives up. Soroban's own limit is far lower; this only exists so that a
-// malformed or hostile spec section cannot drive unbounded recursion.
-const maxTypeDepth = 64
+// MaxTypeDepth bounds how deeply nested a type may be before conversion
+// gives up. Soroban's own limit is far lower; this exists so a malformed or
+// hostile spec section cannot drive unbounded recursion. It is enforced
+// during conversion, on the way down, so a too-deep type is rejected before
+// a model value for it is ever built.
+const MaxTypeDepth = 64
 
 // scalarKinds maps each primitive XDR spec type onto its model kind.
 // Composite types are handled separately in ConvertType.
@@ -46,8 +48,8 @@ func ConvertType(t xdr.ScSpecTypeDef) (model.Type, error) {
 }
 
 func convertType(t xdr.ScSpecTypeDef, depth int) (model.Type, error) {
-	if depth > maxTypeDepth {
-		return model.Type{}, fmt.Errorf("type nested deeper than %d levels", maxTypeDepth)
+	if depth > MaxTypeDepth {
+		return model.Type{}, fmt.Errorf("%w: type nested deeper than %d levels", ErrLimitExceeded, MaxTypeDepth)
 	}
 
 	if kind, ok := scalarKinds[t.Type]; ok {

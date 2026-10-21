@@ -325,6 +325,149 @@ func (p *Postgres) ListNetworks(ctx context.Context) ([]string, error) {
 	return networks, nil
 }
 
+// Stats summarises the registry with two aggregate queries: one for the
+// per-network counts, and one for the most recently registered contract.
+func (p *Postgres) Stats(ctx context.Context) (*Stats, error) {
+	const q = `
+		WITH per_contract AS (
+			SELECT c.network, c.contract_id, count(s.id) AS versions
+			FROM contracts c
+			LEFT JOIN specs s
+			  ON s.network = c.network AND s.contract_id = c.contract_id
+			GROUP BY c.network, c.contract_id
+		)
+		SELECT network, count(*) AS contracts, COALESCE(sum(versions), 0)::bigint AS versions
+		FROM per_contract
+		GROUP BY network
+		ORDER BY network`
+
+	rows, err := p.pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("store: counting registry: %w", err)
+	}
+	defer rows.Close()
+
+	stats := &Stats{Networks: []NetworkStats{}}
+	for rows.Next() {
+		var entry NetworkStats
+		if err := rows.Scan(&entry.Network, &entry.Contracts, &entry.Versions); err != nil {
+			return nil, fmt.Errorf("store: scanning registry counts: %w", err)
+		}
+		stats.Networks = append(stats.Networks, entry)
+		stats.Contracts += entry.Contracts
+		stats.Versions += entry.Versions
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: counting registry: %w", err)
+	}
+
+	const latestQ = `
+		SELECT network, contract_id, current_wasm_hash, name, source_url, source_commit, first_seen, last_refreshed, missing_since
+		FROM contracts
+		ORDER BY first_seen DESC, contract_id
+		LIMIT 1`
+
+	var latest Contract
+	err = p.pool.QueryRow(ctx, latestQ).Scan(
+		&latest.Network, &latest.ContractID, &latest.CurrentWasmHash, &latest.Name,
+		&latest.SourceURL, &latest.SourceCommit, &latest.FirstSeen, &latest.LastRefreshed,
+		&latest.MissingSince,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return stats, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: loading most recently registered contract: %w", err)
+	}
+	stats.Latest = &latest
+	return stats, nil
+}
+
+// ListUpgrades returns recent interface upgrades, newest first.
+//
+// The window function pairs every spec row with the version its contract
+// ran before it. Row one of each contract is its registration, so only rows
+// two and later are upgrades.
+func (p *Postgres) ListUpgrades(ctx context.Context, f UpgradeFilter) (*UpgradePage, error) {
+	f.Normalize()
+
+	const q = `
+		WITH ordered AS (
+			SELECT network, contract_id, wasm_hash, decoded_at,
+			       lag(wasm_hash) OVER (
+			           PARTITION BY network, contract_id
+			           ORDER BY decoded_at, id
+			       ) AS old_wasm_hash,
+			       row_number() OVER (
+			           PARTITION BY network, contract_id
+			           ORDER BY decoded_at, id
+			       ) AS position
+			FROM specs
+			WHERE ($1 = '' OR network = $1)
+		)
+		SELECT network, contract_id, old_wasm_hash, wasm_hash, decoded_at, count(*) OVER () AS total
+		FROM ordered
+		WHERE position > 1
+		ORDER BY decoded_at DESC, contract_id, wasm_hash
+		LIMIT $2 OFFSET $3`
+
+	rows, err := p.pool.Query(ctx, q, f.Network, f.Limit, f.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing upgrades: %w", err)
+	}
+	defer rows.Close()
+
+	page := &UpgradePage{Upgrades: []Upgrade{}}
+	for rows.Next() {
+		var u Upgrade
+		var total int
+		if err := rows.Scan(&u.Network, &u.ContractID, &u.OldWasmHash, &u.NewWasmHash, &u.ObservedAt, &total); err != nil {
+			return nil, fmt.Errorf("store: scanning upgrade: %w", err)
+		}
+		page.Upgrades = append(page.Upgrades, u)
+		page.Total = total
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: listing upgrades: %w", err)
+	}
+
+	// The window function only reports a total on rows that came back, so
+	// a page past the end needs the count on its own; otherwise it would
+	// claim the registry has no upgrades at all.
+	if len(page.Upgrades) == 0 && f.Offset > 0 {
+		total, err := p.countUpgrades(ctx, f.Network)
+		if err != nil {
+			return nil, err
+		}
+		page.Total = total
+	}
+
+	return page, nil
+}
+
+// countUpgrades counts the spec rows beyond each contract's first, matching
+// ListUpgrades' predicate.
+func (p *Postgres) countUpgrades(ctx context.Context, network string) (int, error) {
+	const q = `
+		SELECT count(*)
+		FROM (
+			SELECT network, contract_id, wasm_hash,
+			       row_number() OVER (
+			           PARTITION BY network, contract_id
+			           ORDER BY decoded_at, id
+			       ) AS position
+			FROM specs
+			WHERE ($1 = '' OR network = $1)
+		) ordered
+		WHERE position > 1`
+
+	var total int
+	if err := p.pool.QueryRow(ctx, q, network).Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: counting upgrades: %w", err)
+	}
+	return total, nil
+}
+
 func (p *Postgres) countContracts(ctx context.Context, f ListFilter) (int, error) {
 	// Must mirror ListContracts' predicate, or a page past the end would
 	// report a different total from the pages before it.

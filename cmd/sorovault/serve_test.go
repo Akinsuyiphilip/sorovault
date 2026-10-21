@@ -25,7 +25,7 @@ func testRouter(t *testing.T) http.Handler {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := registry.New(stellartest.New(), spec.XDRDecoder{}, store.NewMemory(), registry.Options{Logger: log})
 
-	handler, err := newRouter(reg, log)
+	handler, err := newRouter(reg, log, nil)
 	require.NoError(t, err)
 	return handler
 }

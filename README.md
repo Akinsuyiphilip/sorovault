@@ -286,6 +286,9 @@ stale.
 | `GET` | `/api/openapi.json` | OpenAPI 3.1 description of this API |
 | `GET` | `/api/contracts/{id}/versions` | every stored interface version |
 | `POST` | `/api/contracts/{id}/refresh` | re-check against the network |
+| `GET` | `/api/stats` | contracts per network, stored versions, latest registration, last sweep |
+| `GET` | `/api/upgrades` | recent interface upgrades, newest first — `?network=`, `?limit=`, `?offset=` |
+| `GET` | `/api/upgrades.atom` | the same upgrades as an Atom 1.0 feed |
 | `GET` | `/healthz` | liveness |
 
 `POST /api/contracts` returns **201** when the contract is new and **200** when
@@ -345,8 +348,18 @@ an interface is spelled a particular way. The filters combine with `?q=` and
 `?network=`, and all of them have to match.
 
 Status codes worth knowing: **422** means the contract exists but has no
-interface to serve (a Stellar asset contract, or a module with no spec section),
-as distinct from **404**, which means it is not there at all.
+interface to serve (a Stellar asset contract, a module with no spec section,
+or one over SoroVault's decode limits), as distinct from **404**, which means
+it is not there at all.
+
+**Statistics and the upgrade feed.** `GET /api/stats` is the registry's size
+at a glance: contract and stored-version counts per network, the most
+recently registered contract, and the last automatic refresh sweep when
+refresh is enabled. `GET /api/upgrades` is a paged feed of interface
+changes — the contract, its network, the old and new WASM hashes, and when
+the new version was observed — with the same events available as an Atom 1.0
+feed at `GET /api/upgrades.atom`. A contract's first registration is not an
+upgrade and is excluded from both.
 
 ## CLI
 

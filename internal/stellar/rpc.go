@@ -12,6 +12,8 @@ import (
 	protocol "github.com/stellar/go-stellar-sdk/protocols/rpc"
 	"github.com/stellar/go-stellar-sdk/strkey"
 	"github.com/stellar/go-stellar-sdk/xdr"
+
+	"github.com/soroworks/sorovault/internal/wasm"
 )
 
 // RPCFetcher reads contract code over the Stellar RPC JSON-RPC API.
@@ -146,7 +148,16 @@ func (f *RPCFetcher) codeByHash(ctx context.Context, hash xdr.Hash) ([]byte, err
 		return nil, fmt.Errorf("stellar: entry %x is not contract code", hash)
 	}
 
-	return data.ContractCode.Code, nil
+	// The network caps contract code well below this, but a misbehaving or
+	// hostile endpoint is not bound by that, so refuse the module before it
+	// reaches the decoder.
+	code := data.ContractCode.Code
+	if len(code) > wasm.MaxModuleSize {
+		return nil, fmt.Errorf("%w: code entry %x is %d bytes, limit is %d",
+			wasm.ErrModuleTooLarge, hash, len(code), wasm.MaxModuleSize)
+	}
+
+	return code, nil
 }
 
 // singleEntry requests one ledger key and returns the entry, or nil when the

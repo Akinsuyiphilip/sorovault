@@ -213,6 +213,46 @@
         }
       }
     },
+    "/api/stats": {
+      "get": {
+        "summary": "Registry statistics",
+        "description": "Contract and interface-version counts per network, the most recently registered contract, and the most recent automatic refresh sweep. `last_refresh` is omitted when automatic refresh is not enabled.",
+        "operationId": "getStats",
+        "responses": {
+          "200": { "description": "The registry's size at a glance.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Stats" }, "examples": { "stats": { "$ref": "#/components/examples/Stats" } } } } }
+        }
+      }
+    },
+    "/api/upgrades": {
+      "get": {
+        "summary": "Recent interface upgrades",
+        "description": "One event per stored interface version that replaced an earlier one, newest first. A contract's first registration is not an upgrade, so it is excluded.",
+        "operationId": "listUpgrades",
+        "parameters": [
+          { "$ref": "#/components/parameters/network" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "One page of upgrade events.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpgradeList" }, "examples": { "upgrades": { "$ref": "#/components/examples/UpgradeList" } } } } }
+        }
+      }
+    },
+    "/api/upgrades.atom": {
+      "get": {
+        "summary": "Recent interface upgrades as an Atom feed",
+        "description": "The same events as /api/upgrades, in Atom 1.0 (RFC 4287), so feed readers can subscribe directly. A page with more events carries a rel=\"next\" link.",
+        "operationId": "getUpgradesAtom",
+        "parameters": [
+          { "$ref": "#/components/parameters/network" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "An Atom 1.0 feed of recent upgrades.", "content": { "application/atom+xml": { "schema": { "type": "string" } } } }
+        }
+      }
+    },
     "/api/openapi.json": {
       "get": {
         "summary": "This document",
@@ -242,6 +282,34 @@
     },
     "examples": {
       "Liveness": { "value": { "status": "ok", "version": "dev" } },
+      "Stats": { "value": {
+        "networks": [
+          { "network": "public", "contracts": 42, "versions": 57 },
+          { "network": "testnet", "contracts": 18, "versions": 23 }
+        ],
+        "contracts": 60,
+        "versions": 80,
+        "latest_contract": {
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "first_seen": "2026-08-07T12:00:00Z",
+          "last_refreshed": "2026-08-07T12:00:00Z"
+        },
+        "last_refresh": { "checked": 12, "changed": 1, "failed": 0, "busy": 0, "missing": 2, "completed_at": "2026-08-07T12:05:00Z" }
+      } },
+      "UpgradeList": { "value": {
+        "upgrades": [{
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "old_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "new_wasm_hash": "0f5bd7b2e93efd1c07d2f5b1f0f2f2a1c0d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+          "observed_at": "2026-08-07T12:00:00Z"
+        }],
+        "total": 1,
+        "limit": 50,
+        "offset": 0
+      } },
       "ContractList": { "value": {
         "contracts": [{
           "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
@@ -359,6 +427,60 @@
       } }
     },
     "schemas": {
+      "NetworkStats": {
+        "type": "object",
+        "properties": {
+          "network": { "type": "string" },
+          "contracts": { "type": "integer", "description": "Registered contracts on this network." },
+          "versions": { "type": "integer", "description": "Stored interface versions, including superseded ones." }
+        },
+        "required": ["network", "contracts", "versions"],
+        "additionalProperties": false
+      },
+      "Stats": {
+        "type": "object",
+        "properties": {
+          "networks": { "type": "array", "description": "Every network with a registered contract, ordered by name.", "items": { "$ref": "#/components/schemas/NetworkStats" } },
+          "contracts": { "type": "integer", "description": "Registered contracts across every network." },
+          "versions": { "type": "integer", "description": "Stored interface versions across every network." },
+          "latest_contract": { "$ref": "#/components/schemas/Contract", "description": "The most recently registered contract. Absent when the registry is empty." },
+          "last_refresh": { "$ref": "#/components/schemas/RefreshSummary", "description": "The most recent automatic refresh sweep. Absent when refresh is disabled or no sweep has finished yet." }
+        },
+        "required": ["networks", "contracts", "versions"]
+      },
+      "RefreshSummary": {
+        "type": "object",
+        "properties": {
+          "checked": { "type": "integer", "description": "Stale contracts the sweep attempted." },
+          "changed": { "type": "integer", "description": "Contracts that had been upgraded since the previous check." },
+          "failed": { "type": "integer", "description": "Contracts that could not be refreshed." },
+          "busy": { "type": "integer", "description": "Contracts deferred because the registry was at its concurrency limit." },
+          "missing": { "type": "integer", "description": "Contracts no longer on the network." },
+          "completed_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["checked", "changed", "failed", "busy", "missing", "completed_at"]
+      },
+      "Upgrade": {
+        "type": "object",
+        "properties": {
+          "contract_id": { "$ref": "#/components/schemas/ContractID" },
+          "network": { "type": "string" },
+          "old_wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
+          "new_wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
+          "observed_at": { "type": "string", "format": "date-time", "description": "When the new interface version was recorded." }
+        },
+        "required": ["contract_id", "network", "old_wasm_hash", "new_wasm_hash", "observed_at"]
+      },
+      "UpgradeList": {
+        "type": "object",
+        "properties": {
+          "upgrades": { "type": "array", "items": { "$ref": "#/components/schemas/Upgrade" } },
+          "total": { "type": "integer", "description": "Upgrades ignoring paging." },
+          "limit": { "type": "integer" },
+          "offset": { "type": "integer" }
+        },
+        "required": ["upgrades", "total", "limit", "offset"]
+      },
       "ContractID": { "type": "string", "pattern": "^C[A-Z2-7]{55}$", "description": "Strkey contract address." },
       "WasmHash": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "SHA-256 of the contract's WASM module, hex." },
       "Error": { "type": "object", "properties": { "error": { "type": "string" } }, "required": ["error"] },

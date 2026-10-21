@@ -1,4 +1,8 @@
 :root {
+  /* Both palettes are available, and the browser picks one from the OS
+     setting. Declaring it also themes form controls and scrollbars. */
+  color-scheme: light dark;
+
   --bg: #fbfbfa;
   --panel: #ffffff;
   --ink: #1c1c1a;
@@ -8,6 +12,14 @@
   --accent-soft: #e6f1ed;
   --missing: #a33f52;
   --missing-soft: #fbecee;
+
+  /* Syntax highlighting. Every colour that carries text is a custom
+     property, so the dark palette is a single override rather than a
+     second set of rules. */
+  --syntax-parameter: #9a4f18;
+  --syntax-constructor: #a33f52;
+  --syntax-reference: #246d8a;
+
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
@@ -22,6 +34,10 @@
     --accent-soft: #23302b;
     --missing: #f095a4;
     --missing-soft: #2f2224;
+
+    --syntax-parameter: #f1ad72;
+    --syntax-constructor: #f095a4;
+    --syntax-reference: #78c6e4;
   }
 }
 
@@ -198,18 +214,12 @@ table { width: 100%; border-collapse: collapse; }
 .signature { overflow-wrap: anywhere; }
 .sig-keyword, .type-keyword { color: var(--dim); font-weight: 500; }
 .sig-function { color: var(--ink); font-weight: 700; }
-.sig-parameter { color: #9a4f18; }
-.type-constructor { color: #a33f52; font-weight: 600; }
+.sig-parameter { color: var(--syntax-parameter); }
+.type-constructor { color: var(--syntax-constructor); font-weight: 600; }
 .type-name, .type-parameter { color: var(--accent); }
-.type-reference, .type-definition { color: #246d8a; font-weight: 600; }
+.type-reference, .type-definition { color: var(--syntax-reference); font-weight: 600; }
 .type-reference { text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .type-punctuation { color: var(--dim); }
-
-@media (prefers-color-scheme: dark) {
-  .sig-parameter { color: #f1ad72; }
-  .type-constructor { color: #f095a4; }
-  .type-reference, .type-definition { color: #78c6e4; }
-}
 
 .doc {
   color: var(--dim);

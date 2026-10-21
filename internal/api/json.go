@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/soroworks/sorovault/internal/model"
+	"github.com/soroworks/sorovault/internal/refresher"
 	"github.com/soroworks/sorovault/internal/store"
 )
 
@@ -132,6 +133,21 @@ type versionsResponse struct {
 	ContractID string              `json:"contract_id"`
 	Network    string              `json:"network"`
 	Versions   []store.SpecVersion `json:"versions"`
+}
+
+type statsResponse struct {
+	Networks       []store.NetworkStats   `json:"networks"`
+	Contracts      int                    `json:"contracts"`
+	Versions       int                    `json:"versions"`
+	LatestContract *store.Contract        `json:"latest_contract,omitempty"`
+	LastRefresh    *refresher.SweepRecord `json:"last_refresh,omitempty"`
+}
+
+type upgradeListResponse struct {
+	Upgrades []store.Upgrade `json:"upgrades"`
+	Total    int             `json:"total"`
+	Limit    int             `json:"limit"`
+	Offset   int             `json:"offset"`
 }
 
 type errorResponse struct {

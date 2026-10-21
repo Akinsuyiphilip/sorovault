@@ -174,6 +174,38 @@ func TestNewRejectsNonPositiveInterval(t *testing.T) {
 	}
 }
 
+// TestLastSweepReportsTheMostRecentSweep proves the in-memory summary the
+// statistics endpoint reads is recorded once Run completes a sweep, and not
+// before.
+func TestLastSweepReportsTheMostRecentSweep(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	f.register(t, contractID(t, 1), "hello")
+	f.clock.Advance(interval + time.Minute)
+
+	r := f.refresher(t)
+	_, ok := r.LastSweep()
+	assert.False(t, ok, "no sweep has finished yet")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		_, ok := r.LastSweep()
+		return ok
+	}, 5*time.Second, 10*time.Millisecond)
+
+	record, ok := r.LastSweep()
+	require.True(t, ok)
+	assert.Equal(t, refresher.Summary{Checked: 1}, record.Summary)
+	assert.Equal(t, f.clock.Now().UTC(), record.CompletedAt)
+
+	cancel()
+	require.NoError(t, <-done)
+}
+
 func TestSweepSkipsRecentlyRefreshed(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
