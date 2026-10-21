@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +71,41 @@ func (h *harness) get(t *testing.T, path string) (*http.Response, string) {
 	raw, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	return resp, string(raw)
+}
+
+// postForm submits the registration form without following the redirect, so
+// a test can assert on the status and Location it produced.
+func (h *harness) postForm(t *testing.T, path string, form url.Values, headers map[string]string) (*http.Response, string) {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		h.server.URL+path, strings.NewReader(form.Encode()))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp, string(raw)
+}
+
+// deploy puts the real testnet fixture on the fake network under the given
+// ID, without registering it.
+func (h *harness) deploy(t *testing.T, id string) {
+	t.Helper()
+
+	module, err := os.ReadFile("../spec/testdata/zkvote.wasm")
+	require.NoError(t, err)
+	h.fake.Deploy(id, module)
 }
 
 // register puts the real testnet fixture into the registry under the given ID.
@@ -269,6 +306,16 @@ func TestContractPage(t *testing.T) {
 	assert.Contains(t, body, `<span class="type-parameter">32</span>`)
 	assert.Contains(t, body, `<a class="type-reference" href="#type-VoteParams">VoteParams</a>`)
 	assert.Contains(t, body, `<span class="type-definition" id="type-VoteParams">VoteParams</span>`)
+	// Every symbol has an anchor of its own, prefixed by kind so a function
+	// and a type that share a name do not collide.
+	assert.Contains(t, body, `id="fn-has_voted"`)
+	assert.Contains(t, body, `href="#fn-has_voted"`)
+	assert.Contains(t, body, `id="fn-vote"`)
+	assert.Contains(t, body, `id="type-VoteParams"`)
+	assert.Contains(t, body, `href="#type-VoteParams"`)
+	assert.Contains(t, body, `id="event-Voted"`)
+	assert.Contains(t, body, `href="#event-Voted"`)
+	assert.Contains(t, body, `class="anchor"`, "each heading carries a visible link to itself")
 	assert.Contains(t, body, `<span class="type-keyword">error</span> <span class="type-definition" id="type-Error">Error</span>`)
 	assert.Contains(t, body, "Voted", "the event should be listed")
 	assert.Contains(t, body, "rssdkver", "build metadata should be shown")
@@ -291,6 +338,29 @@ func TestContractPageEscapesOutput(t *testing.T) {
 	// Rendered generic types must appear escaped, never as live tags.
 	assert.NotContains(t, body, "<BytesN<32>>")
 	assert.Contains(t, body, "&lt;")
+}
+
+// TestContractPageEscapesAnchorIDs proves a contract's own name cannot break
+// out of the id it is written into.
+func TestContractPageEscapesAnchorIDs(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	iface := &model.Interface{
+		ABIVersion: model.ABIVersion,
+		Functions:  []model.Function{{Name: `evil"><script>alert(1)</script>`}},
+	}
+	require.NoError(t, h.reg.Store().Save(context.Background(), store.Contract{
+		ContractID:      idA,
+		Network:         "testnet",
+		CurrentWasmHash: "hash-a",
+	}, iface))
+
+	_, body := h.get(t, "/contracts/"+idA)
+
+	assert.NotContains(t, body, "<script>")
+	assert.Contains(t, body, "fn-evil", "the anchor is still rendered, escaped")
+	assert.Contains(t, body, "&#34;", "the quote in the name is escaped in the attribute")
 }
 
 func TestContractPageNotFound(t *testing.T) {
@@ -319,6 +389,124 @@ func TestContractPageOldVersion(t *testing.T) {
 
 	resp, _ = h.get(t, "/contracts/"+idA+"?wasm_hash=deadbeef")
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestIndexHasRegisterForm(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	_, body := h.get(t, "/")
+	assert.Contains(t, body, `action="/contracts"`, "the form works without JavaScript")
+	assert.Contains(t, body, `method="post"`)
+	assert.Contains(t, body, `name="contract_id"`)
+	assert.Contains(t, body, `hx-post="/contracts"`, "the form is enhanced with htmx")
+}
+
+func TestRegisterFormRegistersAndRedirects(t *testing.T) {
+	t.Parallel()
+
+	t.Run("origin header", func(t *testing.T) {
+		h := newHarness(t)
+		h.deploy(t, idA)
+
+		resp, _ := h.postForm(t, "/contracts", url.Values{"contract_id": {idA}},
+			map[string]string{"Origin": h.server.URL})
+		require.Equal(t, http.StatusSeeOther, resp.StatusCode)
+		assert.Equal(t, "/contracts/"+idA+"?network=testnet", resp.Header.Get("Location"))
+
+		resp, body := h.get(t, "/contracts/"+idA)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Contains(t, body, idA)
+	})
+
+	t.Run("referer fallback", func(t *testing.T) {
+		h := newHarness(t)
+		h.deploy(t, idA)
+
+		resp, _ := h.postForm(t, "/contracts", url.Values{"contract_id": {idA}},
+			map[string]string{"Referer": h.server.URL + "/"})
+		assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
+	})
+}
+
+// TestRegisterFormRejectsCrossSite proves the write is guarded: a browser
+// names the initiating origin, and a page cannot forge it.
+func TestRegisterFormRejectsCrossSite(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.deploy(t, idA)
+
+	for name, headers := range map[string]map[string]string{
+		"foreign origin": {"Origin": "https://evil.example"},
+		"no source":      {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			resp, body := h.postForm(t, "/contracts", url.Values{"contract_id": {idA}}, headers)
+			assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+			assert.Contains(t, body, "must be submitted from SoroVault")
+		})
+	}
+
+	_, err := h.reg.Store().GetContract(context.Background(), "testnet", idA)
+	assert.ErrorIs(t, err, store.ErrNotFound, "a rejected post must not register anything")
+}
+
+// TestRegisterFormErrorsAreInline checks the errors carry the same meaning as
+// the API's status codes, and land on the page rather than in a JSON body.
+func TestRegisterFormErrorsAreInline(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	t.Run("empty ID", func(t *testing.T) {
+		headers := map[string]string{"Origin": h.server.URL}
+		resp, body := h.postForm(t, "/contracts", url.Values{"contract_id": {""}}, headers)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Contains(t, body, "Enter a contract ID")
+	})
+
+	t.Run("invalid ID", func(t *testing.T) {
+		headers := map[string]string{"Origin": h.server.URL}
+		resp, body := h.postForm(t, "/contracts", url.Values{"contract_id": {"not-a-contract"}}, headers)
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		assert.Contains(t, body, "not a valid contract ID")
+		assert.Contains(t, body, "Registered contracts", "the page comes back without scripting")
+		assert.Contains(t, body, `value="not-a-contract"`, "the typed ID is kept for correction")
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		headers := map[string]string{"Origin": h.server.URL}
+		resp, body := h.postForm(t, "/contracts", url.Values{"contract_id": {idB}}, headers)
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+		assert.Contains(t, body, "No contract with that ID")
+	})
+}
+
+func TestRegisterFormHtmx(t *testing.T) {
+	t.Parallel()
+
+	t.Run("error swaps the form", func(t *testing.T) {
+		h := newHarness(t)
+		headers := map[string]string{"Origin": h.server.URL, "HX-Request": "true"}
+
+		resp, body := h.postForm(t, "/contracts", url.Values{"contract_id": {"nope"}}, headers)
+		assert.Equal(t, http.StatusOK, resp.StatusCode, "htmx only swaps successful responses")
+		assert.Contains(t, body, `id="register-form"`)
+		assert.Contains(t, body, "not a valid contract ID")
+		assert.NotContains(t, body, "<html", "the response is a fragment, not a page")
+	})
+
+	t.Run("success redirects through the header", func(t *testing.T) {
+		h := newHarness(t)
+		h.deploy(t, idA)
+		headers := map[string]string{"Origin": h.server.URL, "HX-Request": "true"}
+
+		resp, _ := h.postForm(t, "/contracts", url.Values{"contract_id": {idA}}, headers)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "/contracts/"+idA+"?network=testnet", resp.Header.Get("HX-Redirect"))
+	})
 }
 
 func TestStaticAssets(t *testing.T) {

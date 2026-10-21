@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -262,12 +263,62 @@ can be piped straight into other tooling.`,
 	return cmd
 }
 
+func newVersionsCmd() *cobra.Command {
+	var (
+		network string
+		asJSON  bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "versions <contract_id>",
+		Short: "List a contract's stored interface versions",
+		Long: `Print every interface SoroVault has stored for a contract, newest first.
+
+The current version is the one the contract runs now; an older one can be
+read with "get --wasm-hash".`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return withApp(cmd.Context(), func(ctx context.Context, a *app) error {
+				net := network
+				if net == "" {
+					var err error
+					if net, err = a.registry.Network(ctx); err != nil {
+						return err
+					}
+				}
+
+				versions, err := a.registry.Store().ListVersions(ctx, net, args[0])
+				if err != nil {
+					return err
+				}
+
+				if asJSON {
+					return writeJSON(cmd.OutOrStdout(), versionsDocument{
+						ContractID: args[0],
+						Network:    net,
+						Versions:   versions,
+					})
+				}
+				printVersions(cmd.OutOrStdout(), versions)
+				return nil
+			})
+		},
+	}
+
+	cmd.Flags().StringVar(&network, "network", "", "network to read from (default: the network RPC_URL serves)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the versions as JSON")
+	return cmd
+}
+
 func newCodegenCmd() *cobra.Command {
 	var (
-		network  string
-		wasmHash string
-		lang     string
-		output   string
+		network     string
+		wasmHash    string
+		lang        string
+		output      string
+		asPackage   bool
+		packageName string
+		pkgVersion  string
 	)
 
 	cmd := &cobra.Command{
@@ -278,12 +329,26 @@ func newCodegenCmd() *cobra.Command {
 The client is generated from what SoroVault already holds, so no network
 access is needed. --wasm-hash generates against a superseded version.
 
-Supported formats are TypeScript (ts) and Markdown (md).`,
+Supported formats are TypeScript (ts) and Markdown (md). With --package the
+output is a complete npm package: the client under src/, a package.json that
+pins @stellar/stellar-sdk and buffer as peer dependencies, a tsconfig.json
+and a README, ready to publish or install from a tarball.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if lang != "ts" && lang != "typescript" && lang != "md" && lang != "markdown" {
 				return fmt.Errorf("unsupported --lang %q (supported: ts, md)", lang)
 			}
+			if asPackage {
+				if lang == "md" || lang == "markdown" {
+					return fmt.Errorf("--package writes a TypeScript package, so --lang md cannot be packaged")
+				}
+				if strings.TrimSpace(packageName) == "" {
+					return fmt.Errorf("--package needs --name: the npm package name to publish")
+				}
+			} else if pkgVersion != "" {
+				return fmt.Errorf("--package-version only applies to --package")
+			}
+
 			return withApp(cmd.Context(), func(ctx context.Context, a *app) error {
 				net := network
 				if net == "" {
@@ -303,6 +368,33 @@ Supported formats are TypeScript (ts) and Markdown (md).`,
 					Network:    stored.Network,
 					WasmHash:   stored.WasmHash,
 				}
+
+				if asPackage {
+					files, err := codegen.Package(stored.Interface, src, codegen.PackageOptions{
+						Name:    packageName,
+						Version: pkgVersion,
+					})
+					if err != nil {
+						return err
+					}
+
+					dir := output
+					if dir == "" || dir == "-" {
+						dir = packageDirName(packageName)
+					}
+					for _, file := range files {
+						path := filepath.Join(dir, filepath.FromSlash(file.Path))
+						if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+							return err
+						}
+						if err := os.WriteFile(path, file.Data, 0o644); err != nil {
+							return err
+						}
+					}
+					fmt.Fprintf(cmd.ErrOrStderr(), "wrote %s (%d files)\n", dir, len(files))
+					return nil
+				}
+
 				var source string
 				if lang == "md" || lang == "markdown" {
 					source, err = codegen.Markdown(stored.Interface, src)
@@ -329,8 +421,21 @@ Supported formats are TypeScript (ts) and Markdown (md).`,
 	cmd.Flags().StringVar(&network, "network", "", "network to read from (default: the network RPC_URL serves)")
 	cmd.Flags().StringVar(&wasmHash, "wasm-hash", "", "generate for a specific version instead of the current one")
 	cmd.Flags().StringVar(&lang, "lang", "ts", "output format (ts or md)")
-	cmd.Flags().StringVarP(&output, "output", "o", "", "write to this file instead of stdout")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "write to this file, or this directory with --package")
+	cmd.Flags().BoolVar(&asPackage, "package", false, "write a complete npm package instead of one file")
+	cmd.Flags().StringVar(&packageName, "name", "", "npm package name for --package (@scope/name)")
+	cmd.Flags().StringVar(&pkgVersion, "package-version", "", "version for --package (default: derived from the WASM hash)")
 	return cmd
+}
+
+// packageDirName is the directory --package writes to when --output is not
+// given. A scope is part of the package name, not a directory to create, so
+// @acme/zkvote becomes zkvote.
+func packageDirName(name string) string {
+	if _, base, ok := strings.Cut(name, "/"); ok {
+		return base
+	}
+	return name
 }
 
 func newMigrateCmd() *cobra.Command {
@@ -653,6 +758,30 @@ func printInterface(w io.Writer, s *store.Spec) {
 			fmt.Fprintf(w, "  %s (%d params)\n", e.Name, len(e.Params))
 		}
 	}
+}
+
+// versionsDocument is the JSON shape of the versions command. It matches
+// what GET /api/contracts/{id}/versions serves, so the two are
+// interchangeable in a pipeline.
+type versionsDocument struct {
+	ContractID string              `json:"contract_id"`
+	Network    string              `json:"network"`
+	Versions   []store.SpecVersion `json:"versions"`
+}
+
+// printVersions writes one row per stored interface, newest first.
+func printVersions(w io.Writer, versions []store.SpecVersion) {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "WASM HASH\tDECODED\tCURRENT")
+	for _, v := range versions {
+		current := ""
+		if v.Current {
+			current = "yes"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\n",
+			v.WasmHash, v.DecodedAt.UTC().Format("2006-01-02 15:04"), current)
+	}
+	_ = tw.Flush()
 }
 
 // printFunction writes one function's signature in detail.

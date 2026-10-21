@@ -29,5 +29,11 @@
 
 {{template "contract_rows.html" .}}
 
+<section>
+  <h2>Register a contract</h2>
+  <p class="dim">Fetch a contract's interface from the network and add it to the registry.</p>
+  {{template "register.html" (registerForm .ContractID .RegisterError)}}
+</section>
+
 {{template "page_foot"}}
 {{end}}

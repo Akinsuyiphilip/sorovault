@@ -221,6 +221,20 @@ table { width: 100%; border-collapse: collapse; }
 .type-reference { text-decoration-thickness: 1px; text-underline-offset: 2px; }
 .type-punctuation { color: var(--dim); }
 
+/* Symbol permalinks. The icon sits next to the heading it links to, so it
+   is visible without hovering, and quiet enough not to compete with it. */
+.anchor {
+  margin-left: .4rem;
+  font-size: .8em;
+  font-weight: 400;
+  color: var(--dim);
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.anchor:hover,
+.anchor:focus-visible { color: var(--accent); }
+
 .doc {
   color: var(--dim);
   font-size: .875rem;
@@ -323,6 +337,58 @@ table { width: 100%; border-collapse: collapse; }
   background: var(--panel);
   padding: .1rem .35rem;
   border-radius: 4px;
+}
+
+/* Register form */
+
+.register {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: .5rem;
+}
+
+.register label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: .3rem;
+  font-size: .8rem;
+  color: var(--dim);
+}
+
+.register input {
+  padding: .55rem .7rem;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: .875rem;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.register input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.register button {
+  padding: .55rem 1rem;
+  font: inherit;
+  cursor: pointer;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.register .notice { flex-basis: 100%; margin: .25rem 0 0; }
+
+.notice.error {
+  border-left-color: var(--missing);
+  background: var(--missing-soft);
+  color: var(--missing);
 }
 
 .jsonfoot { font-size: .85rem; color: var(--dim); margin-top: 2rem; }
