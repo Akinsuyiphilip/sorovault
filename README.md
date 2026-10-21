@@ -50,7 +50,8 @@ a deployer (SoroForge) and a simulator (SoroProbe).
 - **Version** interfaces — when a contract is upgraded, the prior interface is kept
 - **Find the contracts that share a WASM** — the question a vulnerability in a
   shared piece of code raises
-- **Browse** it all in a small server-rendered UI
+- **Browse** it all in a small server-rendered UI, with a permalink for every
+  function, type and event and a form that registers a contract while you browse
 
 Records are namespaced by network, so the same contract ID on testnet and
 mainnet are separate entries.
@@ -274,7 +275,8 @@ The wait is short on purpose: a client that is told to come back shortly is
 better served than one left hanging behind a queue the server cannot drain.
 The refresher treats a busy registry the same way — it skips the contract and
 picks it up on the next sweep, since a contract that was not refreshed stays
-stale.
+stale. The browse UI's registration form draws on the same budget and shows
+the same **503**, with the `Retry-After` header, inline on the page.
 
 ## HTTP API
 
@@ -293,6 +295,9 @@ stale.
 | `GET` | `/api/openapi.json` | OpenAPI 3.1 description of this API |
 | `GET` | `/api/contracts/{id}/versions` | every stored interface version |
 | `POST` | `/api/contracts/{id}/refresh` | re-check against the network |
+| `GET` | `/api/stats` | contracts per network, stored versions, latest registration, last sweep |
+| `GET` | `/api/upgrades` | recent interface upgrades, newest first — `?network=`, `?limit=`, `?offset=` |
+| `GET` | `/api/upgrades.atom` | the same upgrades as an Atom 1.0 feed |
 | `GET` | `/healthz` | liveness |
 
 `POST /api/contracts` returns **201** when the contract is new and **200** when
@@ -352,8 +357,37 @@ an interface is spelled a particular way. The filters combine with `?q=` and
 `?network=`, and all of them have to match.
 
 Status codes worth knowing: **422** means the contract exists but has no
-interface to serve (a Stellar asset contract, or a module with no spec section),
-as distinct from **404**, which means it is not there at all.
+interface to serve (a Stellar asset contract, a module with no spec section,
+or one over SoroVault's decode limits), as distinct from **404**, which means
+it is not there at all.
+
+**Statistics and the upgrade feed.** `GET /api/stats` is the registry's size
+at a glance: contract and stored-version counts per network, the most
+recently registered contract, and the last automatic refresh sweep when
+refresh is enabled. `GET /api/upgrades` is a paged feed of interface
+changes — the contract, its network, the old and new WASM hashes, and when
+the new version was observed — with the same events available as an Atom 1.0
+feed at `GET /api/upgrades.atom`. A contract's first registration is not an
+upgrade and is excluded from both.
+
+## Browse UI
+
+`serve` mounts a small server-rendered UI at `/`. The contract list is
+searchable as you type; htmx swaps the table, and the same form works with
+scripting off. Every contract page gives each function, type and event a
+permalink — `#fn-transfer`, `#type-Amount`, `#event-Transfer` — with a visible
+link beside its heading, so a discussion can point at one entry point instead
+of the top of the page. The kind is part of the anchor, so a function and a
+struct that share a name do not collide.
+
+The index page also carries a registration form, so a contract can be added
+while browsing rather than through the CLI or a curl. It posts to the UI
+rather than the JSON API, which lets a failure (invalid ID, not found, no
+interface, a busy registry) be explained in place with the same meaning as
+the API's status codes. It is a plain HTML form that htmx upgrades, and the
+write is accepted only when the browser names this origin in `Origin` (or
+`Referer`): the UI has no session for a CSRF token to bind to, so a
+same-origin check is the control that actually protects the write.
 
 **Contracts that share a WASM.** Many contracts run the same code: every
 instance of a token template, every vault a factory deployed. That is the
@@ -389,7 +423,8 @@ sorovault add <contract_id>...      # fetch, decode and register
 sorovault refresh <contract_id>...  # re-check for an upgraded interface
 sorovault list                      # -q, --function, --type, --network, --limit, --offset
 sorovault get <contract_id>         # --function, --wasm-hash, --json
-sorovault codegen <contract_id>     # --lang ts|md; -o, --wasm-hash
+sorovault versions <contract_id>    # --network, --json
+sorovault codegen <contract_id>     # --lang ts|md; -o, --wasm-hash, --package
 sorovault serve                     # JSON API + browse UI
 sorovault migrate                   # apply schema migrations
 sorovault doctor                    # check a deployment's health
@@ -408,6 +443,15 @@ inputs:
   nullifier  BytesN<32>
 
 returns: bool
+```
+
+`sorovault versions` lists a contract's stored interface history, newest
+first, so the hash `get --wasm-hash` wants is one command away:
+
+```console
+$ sorovault versions CDZZ…4PAN
+WASM HASH                                                         DECODED           CURRENT
+c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781  2026-08-07 09:14  yes
 ```
 
 ### `sorovault doctor`
@@ -479,8 +523,30 @@ Type mappings follow the Stellar CLI's own bindings (`u64`→`bigint`,
 the SDK unchanged. It requires `@stellar/stellar-sdk` 14 or later and
 `buffer`.
 
+### Packages
+
+`--package` writes a complete npm package instead of a bare file, so a client
+can be published to a registry or installed from a tarball:
+
+```console
+$ sorovault codegen CDZZ…4PAN --package --name @acme/zkvote -o zkvote-client
+wrote zkvote-client (4 files)
+```
+
+The directory holds `src/index.ts`, a `package.json` that pins
+`@stellar/stellar-sdk` and `buffer` as peer dependencies, a `tsconfig.json`
+that builds to `dist/`, and a short README. `npm install && npm run build` in
+it produces the importable, typed package.
+
+The version defaults to `0.0.0-<WASM hash prefix>`, which names the interface
+unambiguously and sorts below any release the publisher gives it; pass
+`--package-version` to publish under a version of your own. The SDK version is
+read from the same file CI type-checks against, so generated packages and the
+golden client can never disagree.
+
 CI compiles the generated client for the real testnet fixture with
-`tsc --strict` against a pinned SDK, so a change to the generator that would
+`tsc --strict` against a pinned SDK, and builds the generated zkvote package
+with `npm install && npm run build`, so a change to the generator that would
 produce broken TypeScript fails the build.
 
 ## Markdown documentation

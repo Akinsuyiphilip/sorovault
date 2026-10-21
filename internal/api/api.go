@@ -25,10 +25,12 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/soroworks/sorovault/internal/codegen"
+	"github.com/soroworks/sorovault/internal/refresher"
 	"github.com/soroworks/sorovault/internal/registry"
 	"github.com/soroworks/sorovault/internal/spec"
 	"github.com/soroworks/sorovault/internal/stellar"
 	"github.com/soroworks/sorovault/internal/store"
+	"github.com/soroworks/sorovault/internal/wasm"
 )
 
 // Server holds the API's dependencies.
@@ -36,6 +38,11 @@ type Server struct {
 	reg   *registry.Registry
 	log   *slog.Logger
 	cache *interfaceCache
+
+	// lastSweep, when set, reports the most recent automatic refresh
+	// sweep. It is nil when refresh is disabled, and GET /api/stats then
+	// omits the field.
+	lastSweep func() (refresher.SweepRecord, bool)
 }
 
 // NewServer builds an API server over a registry.
@@ -44,6 +51,13 @@ func NewServer(reg *registry.Registry, log *slog.Logger) *Server {
 		log = slog.Default()
 	}
 	return &Server{reg: reg, log: log, cache: newInterfaceCache(interfaceCacheBytes)}
+}
+
+// SetLastSweep makes GET /api/stats report the most recent automatic
+// refresh sweep. Serve calls it when refresh is enabled; without it the
+// field is omitted, which is the honest answer when nothing sweeps.
+func (s *Server) SetLastSweep(fn func() (refresher.SweepRecord, bool)) {
+	s.lastSweep = fn
 }
 
 // Routes returns the API's routes, to be mounted under /api.
@@ -63,6 +77,9 @@ func (s *Server) Routes() chi.Router {
 	r.Get("/contracts/{id}/functions", s.listFunctions)
 	r.Get("/contracts/{id}/functions/{fn}", s.getFunction)
 	r.Get("/contracts/{id}/client.ts", s.getTypeScriptClient)
+	r.Get("/stats", s.getStats)
+	r.Get("/upgrades", s.listUpgrades)
+	r.Get("/upgrades.atom", s.upgradesAtom)
 	r.Get("/openapi.json", serveOpenAPI)
 
 	return r
@@ -255,6 +272,59 @@ func Middleware(log *slog.Logger) []func(http.Handler) http.Handler {
 		middleware.Recoverer,
 		requestLogger(log),
 	}
+}
+
+// getStats serves GET /api/stats.
+func (s *Server) getStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := s.reg.Store().Stats(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	resp := statsResponse{
+		Networks:       stats.Networks,
+		Contracts:      stats.Contracts,
+		Versions:       stats.Versions,
+		LatestContract: stats.Latest,
+	}
+	if s.lastSweep != nil {
+		if record, ok := s.lastSweep(); ok {
+			resp.LastRefresh = &record
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// upgradeFilter reads the paging and network parameters shared by the JSON
+// and Atom forms of the upgrade feed.
+func upgradeFilter(r *http.Request) store.UpgradeFilter {
+	filter := store.UpgradeFilter{
+		Network: r.URL.Query().Get("network"),
+		Limit:   intParam(r.URL.Query().Get("limit"), 0),
+		Offset:  intParam(r.URL.Query().Get("offset"), 0),
+	}
+	filter.Normalize()
+	return filter
+}
+
+// listUpgrades serves GET /api/upgrades.
+func (s *Server) listUpgrades(w http.ResponseWriter, r *http.Request) {
+	filter := upgradeFilter(r)
+
+	page, err := s.reg.Store().ListUpgrades(r.Context(), filter)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, upgradeListResponse{
+		Upgrades: page.Upgrades,
+		Total:    page.Total,
+		Limit:    filter.Limit,
+		Offset:   filter.Offset,
+	})
 }
 
 // listContracts serves GET /api/contracts.
@@ -597,6 +667,13 @@ func (s *Server) errorStatus(r *http.Request, err error) (int, string) {
 	case errors.Is(err, stellar.ErrNoWasm), errors.Is(err, spec.ErrNoSpecSection):
 		// The request was well-formed and the contract exists; it just has
 		// no interface to serve.
+		return http.StatusUnprocessableEntity, err.Error()
+
+	case errors.Is(err, spec.ErrLimitExceeded), errors.Is(err, wasm.ErrModuleTooLarge):
+		// The module or its spec section is larger or deeper than SoroVault
+		// will decode. That is a property of the contract, not a server
+		// fault, so it is a 422 with the limit in the message rather than a
+		// 500.
 		return http.StatusUnprocessableEntity, err.Error()
 
 	case errors.Is(err, registry.ErrNetworkMismatch):

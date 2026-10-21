@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/soroworks/sorovault/internal/stellar"
+	"github.com/soroworks/sorovault/internal/wasm"
 )
 
 // A real testnet contract address, used so the strkey decoding under test
@@ -248,6 +249,28 @@ func TestFetchContract(t *testing.T) {
 
 	assert.Equal(t, []string{"getLedgerEntries", "getLedgerEntries"}, fake.calls,
 		"fetching a module takes exactly two round trips: instance, then code")
+}
+
+// TestFetchRejectsOversizedCode proves the module bound is applied where the
+// bytes arrive, before a hostile RPC response reaches the decoder.
+func TestFetchRejectsOversizedCode(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeRPC(t)
+	srv := fake.start()
+
+	wasmHash := hashOf(0x44)
+	fake.putInstance(testContractID, wasmHash)
+	fake.putCode(wasmHash, make([]byte, wasm.MaxModuleSize+1))
+
+	f := stellar.NewRPCFetcher(srv.URL, srv.Client())
+	t.Cleanup(func() { _ = f.Close() })
+
+	_, err := f.FetchContract(context.Background(), testContractID)
+	require.ErrorIs(t, err, wasm.ErrModuleTooLarge)
+
+	_, err = f.FetchWasm(context.Background(), hex.EncodeToString(wasmHash[:]))
+	require.ErrorIs(t, err, wasm.ErrModuleTooLarge)
 }
 
 // TestWasmHashIsOneRoundTrip is the property that makes refresh cheap: an

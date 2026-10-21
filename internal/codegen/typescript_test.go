@@ -50,6 +50,38 @@ func TestGoldenZKVote(t *testing.T) {
 	assert.Equal(t, string(want), got, "generated client changed; if intended, rerun with -update")
 }
 
+// TestGoldenPackage generates the npm package built around the golden client
+// and compares it with the checked-in files. CI runs npm install and npm run
+// build in that directory, so the package is known to build from scratch,
+// not merely to be stable.
+func TestGoldenPackage(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile("../spec/testdata/zkvote.golden.json")
+	require.NoError(t, err)
+	var iface model.Interface
+	require.NoError(t, json.Unmarshal(raw, &iface))
+
+	files, err := codegen.Package(&iface, src, codegen.PackageOptions{Name: "zkvote-client"})
+	require.NoError(t, err)
+
+	dir := filepath.Join("testdata", "zkvote-pkg")
+	if *update {
+		for _, file := range files {
+			path := filepath.Join(dir, filepath.FromSlash(file.Path))
+			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+			require.NoError(t, os.WriteFile(path, file.Data, 0o644))
+		}
+	}
+
+	for _, file := range files {
+		want, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(file.Path)))
+		require.NoErrorf(t, err, "%s is missing; regenerate with -update", file.Path)
+		assert.Equal(t, string(want), string(file.Data),
+			"%s changed; if intended, rerun with -update", file.Path)
+	}
+}
+
 func TestTypeMapping(t *testing.T) {
 	t.Parallel()
 

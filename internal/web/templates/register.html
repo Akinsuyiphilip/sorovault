@@ -1,0 +1,17 @@
+{{/* The registration form is a plain HTML form, so it works with scripting
+     off, and htmx upgrades it to swap itself in place. The server checks the
+     POST's Origin, which is what protects the write; see web.go. */}}
+{{define "register.html"}}
+<form class="register" id="register-form" action="/contracts" method="post"
+      hx-post="/contracts"
+      hx-target="#register-form"
+      hx-swap="outerHTML">
+  <label for="contract_id">
+    <span>Contract ID</span>
+    <input id="contract_id" name="contract_id" type="text" value="{{.ContractID}}"
+           placeholder="C…" autocomplete="off" spellcheck="false" required>
+  </label>
+  <button type="submit">Register</button>
+  {{if .Error}}<p class="notice error" role="alert">{{.Error}}</p>{{end}}
+</form>
+{{end}}

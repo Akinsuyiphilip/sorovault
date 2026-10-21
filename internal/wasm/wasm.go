@@ -30,6 +30,18 @@ const (
 	SectionContractEnvMeta = "contractenvmetav0"
 )
 
+// MaxModuleSize bounds how large a WASM module this package will read.
+//
+// The Soroban network currently caps a contract's code at 128 KiB (a
+// validator setting, so it can change). 2 MiB is sixteen times that: a
+// module the network accepted is always decodable here, while a hostile or
+// corrupt response cannot make SoroVault walk gigabytes of bytes.
+const MaxModuleSize = 2 << 20
+
+// ErrModuleTooLarge reports a module above MaxModuleSize. It is a property
+// of the input, not a server fault, so the API reports it as 422.
+var ErrModuleTooLarge = errors.New("wasm: module exceeds the size limit")
+
 // ErrSectionNotFound is returned by CustomSection when the module parses
 // cleanly but contains no custom section with the requested name.
 var ErrSectionNotFound = errors.New("wasm: custom section not found")
@@ -129,6 +141,10 @@ func CustomSectionNames(module []byte) ([]string, error) {
 // afterHeader validates the 8-byte module header and returns everything
 // following it.
 func afterHeader(module []byte) ([]byte, error) {
+	if len(module) > MaxModuleSize {
+		return nil, fmt.Errorf("%w: module is %d bytes, limit is %d", ErrModuleTooLarge, len(module), MaxModuleSize)
+	}
+
 	const headerLen = 8
 	if len(module) < headerLen {
 		return nil, fmt.Errorf("wasm: module too short: %d bytes", len(module))

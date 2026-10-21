@@ -41,18 +41,18 @@ func newServeCmd() *cobra.Command {
 					listenAddr = addr
 				}
 
-				handler, err := newRouter(a.registry, a.log)
-				if err != nil {
-					return err
-				}
-
-				stopRefresh, err := startRefresher(ctx, a)
+				refresh, stopRefresh, err := startRefresher(ctx, a)
 				if err != nil {
 					return err
 				}
 				// Stopped before withApp closes the store, so a sweep is
 				// never left writing to a closed pool.
 				defer stopRefresh()
+
+				handler, err := newRouter(a.registry, a.log, refresh)
+				if err != nil {
+					return err
+				}
 
 				return serve(ctx, listenAddr, handler, a.log)
 			})
@@ -64,26 +64,26 @@ func newServeCmd() *cobra.Command {
 }
 
 // startRefresher runs automatic refresh in the background when
-// REFRESH_INTERVAL is set. The returned function cancels it and waits for an
-// in-progress sweep to finish; it is safe to call when refresh is off.
-func startRefresher(ctx context.Context, a *app) (stop func(), err error) {
+// REFRESH_INTERVAL is set. It returns nil when refresh is off, and a stop
+// function that cancels it and waits for an in-progress sweep to finish.
+func startRefresher(ctx context.Context, a *app) (r *refresher.Refresher, stop func(), err error) {
 	if a.cfg.RefreshInterval <= 0 {
-		return func() {}, nil
+		return nil, func() {}, nil
 	}
 
 	notifier, err := refreshNotifier(a)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	r, err := refresher.New(a.registry, refresher.Options{
+	r, err = refresher.New(a.registry, refresher.Options{
 		Interval: a.cfg.RefreshInterval,
 		Timeout:  a.cfg.RPCTimeout,
 		Notifier: notifier,
 		Logger:   a.log.With("component", "refresher"),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -94,7 +94,7 @@ func startRefresher(ctx context.Context, a *app) (stop func(), err error) {
 	}()
 
 	a.log.Info("automatic refresh enabled", "interval", a.cfg.RefreshInterval)
-	return func() {
+	return r, func() {
 		cancel()
 		<-done
 	}, nil
@@ -121,18 +121,24 @@ func refreshNotifier(a *app) (refresher.Notifier, error) {
 }
 
 // newRouter assembles the JSON API, the browse UI and the health endpoint
-// into one handler.
-func newRouter(reg *registry.Registry, log *slog.Logger) (http.Handler, error) {
+// into one handler. refresh may be nil when automatic refresh is off; the
+// statistics endpoint then has no sweep to report.
+func newRouter(reg *registry.Registry, log *slog.Logger, refresh *refresher.Refresher) (http.Handler, error) {
 	ui, err := web.NewServer(reg, log)
 	if err != nil {
 		return nil, err
+	}
+
+	server := api.NewServer(reg, log)
+	if refresh != nil {
+		server.SetLastSweep(refresh.LastSweep)
 	}
 
 	r := chi.NewRouter()
 	r.Use(api.Middleware(log)...)
 
 	r.Get("/healthz", healthz)
-	r.Mount("/api", api.NewServer(reg, log).Routes())
+	r.Mount("/api", server.Routes())
 	r.Mount("/", ui.Routes())
 
 	return http.TimeoutHandler(r, requestTimeout, `{"error":"request timed out"}`), nil

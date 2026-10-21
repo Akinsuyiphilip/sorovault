@@ -36,6 +36,7 @@ type harness struct {
 	server *httptest.Server
 	fake   *stellartest.Fake
 	store  store.Store
+	api    *api.Server
 }
 
 func newHarness(t *testing.T) *harness {
@@ -66,13 +67,14 @@ func newHarnessWithOptions(t *testing.T, fake *stellartest.Fake, db store.Store,
 
 	reg := registry.New(fake, spec.XDRDecoder{}, db, opts)
 
+	server := api.NewServer(reg, log)
 	r := chi.NewRouter()
-	r.Mount("/api", api.NewServer(reg, log).Routes())
+	r.Mount("/api", server.Routes())
 
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	return &harness{server: srv, fake: fake, store: db}
+	return &harness{server: srv, fake: fake, store: db, api: server}
 }
 
 type countingStore struct {

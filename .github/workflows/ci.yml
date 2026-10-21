@@ -92,6 +92,29 @@ jobs:
       - name: Type-check the golden client
         run: npm run typecheck
 
+  # Generating a package is one thing; proving npm accepts it and tsc builds
+  # it is another. This regenerates the checked-in zkvote package and builds
+  # it from scratch with the pinned toolchain.
+  codegen-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          check-latest: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Regenerate the zkvote package
+        run: go test ./internal/codegen -run TestGoldenPackage -update
+      - name: Fail if regeneration changed the checked-in package
+        run: git diff --exit-code internal/codegen/testdata/zkvote-pkg
+      - name: Install and build the package
+        working-directory: internal/codegen/testdata/zkvote-pkg
+        run: npm install --no-audit --no-fund && npm run build
+
   helm:
     runs-on: ubuntu-latest
     steps:

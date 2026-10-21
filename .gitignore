@@ -20,5 +20,10 @@ coverage.html
 internal/codegen/testdata/node_modules/
 internal/codegen/testdata/package-lock.json
 
+# Installed and built by the CI package check.
+internal/codegen/testdata/zkvote-pkg/node_modules/
+internal/codegen/testdata/zkvote-pkg/package-lock.json
+internal/codegen/testdata/zkvote-pkg/dist/
+
 # GoReleaser output.
 /dist/

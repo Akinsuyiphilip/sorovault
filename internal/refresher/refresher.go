@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/soroworks/sorovault/internal/registry"
@@ -57,6 +58,9 @@ type Refresher struct {
 	log      *slog.Logger
 	now      func() time.Time
 	wait     func(context.Context, time.Duration) error
+
+	mu        sync.Mutex
+	lastSweep *SweepRecord
 }
 
 // New builds a Refresher. It returns an error for a non-positive interval
@@ -86,6 +90,25 @@ func New(reg Registry, opts Options) (*Refresher, error) {
 		now:      now,
 		wait:     wait,
 	}, nil
+}
+
+// SweepRecord is what the most recent completed sweep did and when it
+// finished. Serve reports it at GET /api/stats; it is deliberately in
+// memory, since a restart simply starts a new sweep.
+type SweepRecord struct {
+	Summary
+	CompletedAt time.Time `json:"completed_at"`
+}
+
+// LastSweep reports the most recent completed sweep. The second result is
+// false until a sweep has finished.
+func (r *Refresher) LastSweep() (SweepRecord, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.lastSweep == nil {
+		return SweepRecord{}, false
+	}
+	return *r.lastSweep, true
 }
 
 // Summary reports what one sweep did.
@@ -133,6 +156,12 @@ func (r *Refresher) sweepAndLog(ctx context.Context) {
 		}
 		return
 	}
+
+	record := SweepRecord{Summary: sum, CompletedAt: r.now().UTC()}
+	r.mu.Lock()
+	r.lastSweep = &record
+	r.mu.Unlock()
+
 	r.log.InfoContext(ctx, "refresh sweep complete",
 		"checked", sum.Checked,
 		"changed", sum.Changed,

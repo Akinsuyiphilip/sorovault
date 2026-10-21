@@ -10,7 +10,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stellar/go-stellar-sdk v0.7.3
 	github.com/stretchr/testify v1.12.1
-	github.com/yuin/goldmark v1.7.13
+	github.com/yuin/goldmark v1.7.17
 	golang.org/x/sync v0.22.0
 )
 

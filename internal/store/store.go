@@ -251,11 +251,71 @@ type WasmFilter struct {
 	Offset int
 }
 
+// NetworkStats is one network's share of the registry.
+type NetworkStats struct {
+	Network   string `json:"network"`
+	Contracts int    `json:"contracts"`
+	Versions  int    `json:"versions"`
+}
+
+// Stats summarises the size of the registry.
+type Stats struct {
+	// Networks is every network with a registered contract, ordered by
+	// name.
+	Networks []NetworkStats `json:"networks"`
+	// Contracts and Versions total every network.
+	Contracts int `json:"contracts"`
+	Versions  int `json:"versions"`
+	// Latest is the most recently registered contract, if the registry has
+	// one. Registered means first seen: refreshing an old contract does not
+	// make it new.
+	Latest *Contract `json:"latest_contract,omitempty"`
+}
+
+// Upgrade is one recorded interface upgrade: the version a contract ran
+// before, the version it moved to, and when the new one was observed.
+//
+// It is derived from the specs rows rather than stored separately: any spec
+// row beyond a contract's earliest is, by definition, an upgrade.
+type Upgrade struct {
+	ContractID  string    `json:"contract_id"`
+	Network     string    `json:"network"`
+	OldWasmHash string    `json:"old_wasm_hash"`
+	NewWasmHash string    `json:"new_wasm_hash"`
+	ObservedAt  time.Time `json:"observed_at"`
+}
+
+// UpgradeFilter selects and pages the upgrade feed.
+type UpgradeFilter struct {
+	// Network restricts results to one network. Empty means all networks.
+	Network string
+	// Limit is the maximum number of upgrades to return. Zero means
+	// DefaultLimit; anything above MaxLimit is clamped to MaxLimit.
+	Limit int
+	// Offset is the number of upgrades to skip.
+	Offset int
+}
+
 // Normalize trims the network and clamps the filter's paging to the
 // supported range, as ListFilter.Normalize does.
 func (f *WasmFilter) Normalize() {
 	f.Network = strings.TrimSpace(f.Network)
 	f.WasmHash = strings.TrimSpace(f.WasmHash)
+	if f.Limit <= 0 {
+		f.Limit = DefaultLimit
+	}
+	if f.Limit > MaxLimit {
+		f.Limit = MaxLimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+}
+
+// Normalize trims the network and clamps the filter's paging to the
+// supported range.
+func (f *UpgradeFilter) Normalize() {
+	f.Network = strings.TrimSpace(f.Network)
 	if f.Limit <= 0 {
 		f.Limit = DefaultLimit
 	}
@@ -282,6 +342,13 @@ type WasmContract struct {
 type WasmContractPage struct {
 	Contracts []WasmContract `json:"contracts"`
 	// Total is how many contracts match, ignoring paging.
+	Total int `json:"total"`
+}
+
+// UpgradePage is one page of the upgrade feed.
+type UpgradePage struct {
+	Upgrades []Upgrade `json:"upgrades"`
+	// Total is how many upgrades match the filter, ignoring paging.
 	Total int `json:"total"`
 }
 
@@ -334,6 +401,15 @@ type Store interface {
 	// ListNetworks returns the distinct networks represented in the registry,
 	// in ascending order.
 	ListNetworks(ctx context.Context) ([]string, error)
+
+	// Stats summarises the registry: contract and version counts per
+	// network, and the most recently registered contract.
+	Stats(ctx context.Context) (*Stats, error)
+
+	// ListUpgrades returns recent interface upgrades, newest first. A
+	// contract's first stored version is its registration, not an upgrade,
+	// so it is excluded.
+	ListUpgrades(ctx context.Context, f UpgradeFilter) (*UpgradePage, error)
 
 	// GetSpec returns a contract's decoded interface. An empty wasmHash
 	// selects whichever version the contract currently runs.

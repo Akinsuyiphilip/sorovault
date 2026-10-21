@@ -249,6 +249,103 @@ func (m *Memory) ListNetworks(ctx context.Context) ([]string, error) {
 	return networks, nil
 }
 
+// Stats summarises the registry from its in-memory rows.
+func (m *Memory) Stats(ctx context.Context) (*Stats, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	byNetwork := make(map[string]*NetworkStats)
+	stats := &Stats{Networks: []NetworkStats{}}
+	for k, c := range m.contracts {
+		entry, ok := byNetwork[c.Network]
+		if !ok {
+			entry = &NetworkStats{Network: c.Network}
+			byNetwork[c.Network] = entry
+		}
+		entry.Contracts++
+		entry.Versions += len(m.specs[k])
+		stats.Contracts++
+		stats.Versions += len(m.specs[k])
+
+		if stats.Latest == nil || newerContract(c, *stats.Latest) {
+			latest := c
+			latest.MissingSince = copyMissing(c.MissingSince)
+			stats.Latest = &latest
+		}
+	}
+
+	networks := make([]string, 0, len(byNetwork))
+	for network := range byNetwork {
+		networks = append(networks, network)
+	}
+	sort.Strings(networks)
+	for _, network := range networks {
+		stats.Networks = append(stats.Networks, *byNetwork[network])
+	}
+	return stats, nil
+}
+
+// newerContract reports whether a was registered more recently than b. The
+// contract ID breaks a tie so the answer does not depend on map order.
+func newerContract(a, b Contract) bool {
+	if !a.FirstSeen.Equal(b.FirstSeen) {
+		return a.FirstSeen.After(b.FirstSeen)
+	}
+	return a.ContractID < b.ContractID
+}
+
+// ListUpgrades returns recorded interface upgrades, newest first.
+func (m *Memory) ListUpgrades(ctx context.Context, f UpgradeFilter) (*UpgradePage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.Normalize()
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var upgrades []Upgrade
+	for k, specs := range m.specs {
+		c, ok := m.contracts[k]
+		if !ok || (f.Network != "" && c.Network != f.Network) {
+			continue
+		}
+		// Save appends a spec only when a contract starts running a hash it
+		// has not stored before, so this list is already in observation
+		// order. The first entry is the registration, not an upgrade.
+		for i := 1; i < len(specs); i++ {
+			upgrades = append(upgrades, Upgrade{
+				ContractID:  c.ContractID,
+				Network:     c.Network,
+				OldWasmHash: specs[i-1].WasmHash,
+				NewWasmHash: specs[i].WasmHash,
+				ObservedAt:  specs[i].DecodedAt,
+			})
+		}
+	}
+
+	sort.Slice(upgrades, func(i, j int) bool {
+		if !upgrades[i].ObservedAt.Equal(upgrades[j].ObservedAt) {
+			return upgrades[i].ObservedAt.After(upgrades[j].ObservedAt)
+		}
+		if upgrades[i].ContractID != upgrades[j].ContractID {
+			return upgrades[i].ContractID < upgrades[j].ContractID
+		}
+		return upgrades[i].NewWasmHash < upgrades[j].NewWasmHash
+	})
+
+	page := &UpgradePage{Total: len(upgrades), Upgrades: []Upgrade{}}
+	if f.Offset < len(upgrades) {
+		end := min(f.Offset+f.Limit, len(upgrades))
+		page.Upgrades = append(page.Upgrades, upgrades[f.Offset:end]...)
+	}
+	return page, nil
+}
+
 // ListContracts returns a filtered, paged listing ordered newest-refreshed
 // first.
 func (m *Memory) ListContracts(ctx context.Context, f ListFilter) (*ContractPage, error) {
