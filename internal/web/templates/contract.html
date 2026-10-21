@@ -3,11 +3,23 @@
 
 <nav class="crumbs"><a href="/">← All contracts</a></nav>
 
-<h1 class="mono id">{{.Contract.ContractID}}</h1>
+<div class="title-row">
+  <h1 class="mono id" id="contract-id">{{.Contract.ContractID}}</h1>
+  <button class="copy" type="button" data-copy="#contract-id" aria-label="Copy contract ID">{{template "copy_icon"}}</button>
+</div>
 
 <dl class="facts">
   <div><dt>Network</dt><dd><span class="badge">{{.Contract.Network}}</span></dd></div>
-  <div><dt>WASM hash</dt><dd class="mono break">{{.Spec.WasmHash}}</dd></div>
+  <div>
+    <dt>WASM hash</dt>
+    <dd class="mono break">
+      <a id="wasm-hash" href="/api/wasm/{{.Spec.WasmHash}}/contracts?network={{.Contract.Network}}" title="Every contract running this WASM">{{.Spec.WasmHash}}</a>
+      <button class="copy" type="button" data-copy="#wasm-hash" aria-label="Copy WASM hash">{{template "copy_icon"}}</button>
+    </dd>
+  </div>
+  {{if .Interface.EnvMeta}}
+  <div><dt>Protocol</dt><dd class="mono">{{.Interface.EnvMeta.InterfaceVersion}}</dd></div>
+  {{end}}
   {{if .Contract.SourceURL}}
   <div>
     <dt>Source</dt>
@@ -50,8 +62,11 @@
   {{if .Interface.Functions}}
     {{range .Interface.Functions}}
     <article class="fn">
-      <h3 class="mono signature">{{range signatureParts . $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</h3>
-      {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+      <div class="signature-row">
+        <h3 class="mono signature" id="fn-{{.Name}}">{{range signatureParts . $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</h3>
+        <button class="copy" type="button" data-copy="#fn-{{.Name}}" aria-label="Copy signature of {{.Name}}">{{template "copy_icon"}}</button>
+      </div>
+      {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
       {{if .Inputs}}
       <table class="params">
         <tbody>
@@ -84,7 +99,7 @@
   {{range .Interface.Types.Structs}}
   <article class="udt">
     <h3 class="mono"><span class="type-keyword">struct</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span>{{if .IsTuple}} <span class="dim">(tuple)</span>{{end}}</h3>
-    {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+    {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
     <table class="params"><tbody>
       {{range .Fields}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{range typeParts .Type $.Interface}}{{if .Href}}<a class="{{.Class}}" href="{{.Href}}">{{.Text}}</a>{{else}}<span class="{{.Class}}">{{.Text}}</span>{{end}}{{end}}</td></tr>{{end}}
     </tbody></table>
@@ -94,7 +109,7 @@
   {{range .Interface.Types.Unions}}
   <article class="udt">
     <h3 class="mono"><span class="type-keyword">enum</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span></h3>
-    {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+    {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}
       <tr>
@@ -109,7 +124,7 @@
   {{range .Interface.Types.Enums}}
   <article class="udt">
     <h3 class="mono"><span class="type-keyword">enum</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span> <span class="dim">(u32)</span></h3>
-    {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+    {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{.Value}}</td></tr>{{end}}
     </tbody></table>
@@ -119,7 +134,7 @@
   {{range .Interface.Types.ErrorEnums}}
   <article class="udt">
     <h3 class="mono"><span class="type-keyword">error</span> <span class="type-definition" id="{{typeID .Name}}">{{.Name}}</span></h3>
-    {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+    {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
     <table class="params"><tbody>
       {{range .Cases}}<tr><td class="mono pname">{{.Name}}</td><td class="mono ptype">{{.Value}}</td></tr>{{end}}
     </tbody></table>
@@ -134,7 +149,7 @@
   {{range .Interface.Events}}
   <article class="udt">
     <h3 class="mono">{{.Name}}</h3>
-    {{if .Doc}}<p class="doc">{{.Doc}}</p>{{end}}
+    {{if .Doc}}<div class="doc markdown">{{markdown .Doc}}</div>{{end}}
     <table class="params"><tbody>
       {{range .Params}}
       <tr>

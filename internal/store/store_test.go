@@ -613,6 +613,92 @@ func runStoreSuite(t *testing.T, newStore factory) {
 		assert.Equal(t, rich, got.Interface, "the stored ABI must survive a round trip unchanged")
 	})
 
+	t.Run("contracts are listed by the wasm they run", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("a")))
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "h1"), iface("b")))
+
+		page, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1"})
+		require.NoError(t, err)
+		assert.Equal(t, 2, page.Total)
+		require.Len(t, page.Contracts, 2)
+		for _, c := range page.Contracts {
+			assert.True(t, c.Current, "both contracts run this hash")
+		}
+
+		page, err = s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h2"})
+		require.NoError(t, err)
+		assert.Zero(t, page.Total, "no contract runs this hash")
+		assert.Empty(t, page.Contracts, "an empty result must be [] rather than nil")
+	})
+
+	t.Run("the ever filter reaches contracts that ran the wasm in the past", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("a")))
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h2"), iface("a2")))
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "h1"), iface("b")))
+
+		page, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1"})
+		require.NoError(t, err)
+		require.Equal(t, 1, page.Total, "only the contract that still runs the hash is listed")
+		assert.Equal(t, idB, page.Contracts[0].ContractID)
+
+		page, err = s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1", Ever: true})
+		require.NoError(t, err)
+		require.Equal(t, 2, page.Total, "the upgraded contract ran the hash too")
+		for _, c := range page.Contracts {
+			if c.ContractID == idA {
+				assert.False(t, c.Current, "the upgraded contract no longer runs the hash")
+			} else {
+				assert.True(t, c.Current)
+			}
+		}
+	})
+
+	t.Run("the wasm listing is paged", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("a")))
+		require.NoError(t, s.Save(ctx, contract(idB, "testnet", "h1"), iface("b")))
+
+		firstPage, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1", Limit: 1})
+		require.NoError(t, err)
+		require.Len(t, firstPage.Contracts, 1)
+		assert.Equal(t, 2, firstPage.Total, "the total counts matches, not the page")
+
+		secondPage, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1", Limit: 1, Offset: 1})
+		require.NoError(t, err)
+		require.Len(t, secondPage.Contracts, 1)
+		assert.NotEqual(t, firstPage.Contracts[0].ContractID, secondPage.Contracts[0].ContractID,
+			"the second page must hold the other contract")
+
+		page, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "testnet", WasmHash: "h1", Offset: 99})
+		require.NoError(t, err)
+		assert.Empty(t, page.Contracts)
+		assert.Equal(t, 2, page.Total, "paging past the end still reports the true total")
+	})
+
+	t.Run("the wasm listing is scoped to one network", func(t *testing.T) {
+		s := newStore(t)
+		ctx := context.Background()
+
+		require.NoError(t, s.Save(ctx, contract(idA, "testnet", "h1"), iface("a")))
+		require.NoError(t, s.Save(ctx, contract(idA, "public", "h1"), iface("b")))
+
+		page, err := s.ListContractsByWasm(ctx, store.WasmFilter{Network: "public", WasmHash: "h1"})
+		require.NoError(t, err)
+		assert.Equal(t, 1, page.Total)
+
+		page, err = s.ListContractsByWasm(ctx, store.WasmFilter{WasmHash: "h1"})
+		require.NoError(t, err)
+		assert.Equal(t, 2, page.Total, "an empty network means every network")
+	})
+
 	t.Run("concurrent saves are safe", func(t *testing.T) {
 		s := newStore(t)
 		ctx := context.Background()

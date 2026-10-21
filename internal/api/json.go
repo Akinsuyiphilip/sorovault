@@ -134,6 +134,19 @@ type versionsResponse struct {
 	Versions   []store.SpecVersion `json:"versions"`
 }
 
+// wasmContractsResponse is the answer to "who else runs this code?".
+type wasmContractsResponse struct {
+	WasmHash string `json:"wasm_hash"`
+	Network  string `json:"network"`
+	// Ever says whether the listing covers the contracts that ran the hash
+	// in the past as well as the ones running it now.
+	Ever      bool                 `json:"ever"`
+	Contracts []store.WasmContract `json:"contracts"`
+	Total     int                  `json:"total"`
+	Limit     int                  `json:"limit"`
+	Offset    int                  `json:"offset"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }

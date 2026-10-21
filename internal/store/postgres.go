@@ -302,6 +302,89 @@ func (p *Postgres) ListContracts(ctx context.Context, f ListFilter) (*ContractPa
 	return page, nil
 }
 
+// ListContractsByWasm returns a paged listing of the contracts that run the
+// given WASM hash, and — with Ever set — of the ones that ran it in the
+// past.
+//
+// The "ever" case reads the specs table, which keeps one row per interface
+// a contract has ever run; the join is on its unique key, so it costs an
+// index lookup per candidate row.
+func (p *Postgres) ListContractsByWasm(ctx context.Context, f WasmFilter) (*WasmContractPage, error) {
+	f.Normalize()
+
+	// $1 empty means "any network", $3 says whether the contracts that
+	// only ran the hash in the past count too.
+	const q = `
+		SELECT c.network, c.contract_id, c.current_wasm_hash, c.name, c.source_url, c.source_commit,
+		       c.first_seen, c.last_refreshed, c.missing_since,
+		       c.current_wasm_hash = $2 AS current,
+		       count(*) OVER () AS total
+		FROM contracts c
+		WHERE ($1 = '' OR c.network = $1)
+		  AND (c.current_wasm_hash = $2
+		       OR ($3 AND EXISTS (
+		           SELECT 1 FROM specs s
+		           WHERE s.network = c.network AND s.contract_id = c.contract_id AND s.wasm_hash = $2)))
+		ORDER BY c.last_refreshed DESC, c.contract_id
+		LIMIT $4 OFFSET $5`
+
+	rows, err := p.pool.Query(ctx, q, f.Network, f.WasmHash, f.Ever, f.Limit, f.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing contracts for wasm %s: %w", f.WasmHash, err)
+	}
+	defer rows.Close()
+
+	page := &WasmContractPage{Contracts: []WasmContract{}}
+	for rows.Next() {
+		var c WasmContract
+		var total int
+		if err := rows.Scan(
+			&c.Network, &c.ContractID, &c.CurrentWasmHash, &c.Name, &c.SourceURL, &c.SourceCommit,
+			&c.FirstSeen, &c.LastRefreshed, &c.MissingSince, &c.Current, &total,
+		); err != nil {
+			return nil, fmt.Errorf("store: scanning contract: %w", err)
+		}
+		page.Contracts = append(page.Contracts, c)
+		page.Total = total
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: listing contracts for wasm %s: %w", f.WasmHash, err)
+	}
+
+	// The window function only reports a total on rows that came back, so a
+	// page past the end needs a separate count to stay accurate.
+	if len(page.Contracts) == 0 && f.Offset > 0 {
+		total, err := p.countContractsByWasm(ctx, f)
+		if err != nil {
+			return nil, err
+		}
+		page.Total = total
+	}
+
+	return page, nil
+}
+
+// countContractsByWasm counts the contracts that run a given WASM hash.
+//
+// It must mirror ListContractsByWasm's predicate, or a page past the end
+// would report a different total from the pages before it.
+func (p *Postgres) countContractsByWasm(ctx context.Context, f WasmFilter) (int, error) {
+	const q = `
+		SELECT count(*)
+		FROM contracts c
+		WHERE ($1 = '' OR c.network = $1)
+		  AND (c.current_wasm_hash = $2
+		       OR ($3 AND EXISTS (
+		           SELECT 1 FROM specs s
+		           WHERE s.network = c.network AND s.contract_id = c.contract_id AND s.wasm_hash = $2)))`
+
+	var total int
+	if err := p.pool.QueryRow(ctx, q, f.Network, f.WasmHash, f.Ever).Scan(&total); err != nil {
+		return 0, fmt.Errorf("store: counting contracts for wasm %s: %w", f.WasmHash, err)
+	}
+	return total, nil
+}
+
 // ListNetworks returns the distinct networks represented in the registry.
 func (p *Postgres) ListNetworks(ctx context.Context) ([]string, error) {
 	const q = `SELECT DISTINCT network FROM contracts ORDER BY network`

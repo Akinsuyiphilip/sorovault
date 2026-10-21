@@ -16,13 +16,17 @@
     {{range .Contracts}}
       <tr>
         <td>
-          <a class="mono" href="/contracts/{{.ContractID}}?network={{.Network}}">{{.ContractID}}</a>
+          <a class="mono" id="contract-{{.ContractID}}" href="/contracts/{{.ContractID}}?network={{.Network}}">{{.ContractID}}</a>
+          <button class="copy" type="button" data-copy="#contract-{{.ContractID}}" aria-label="Copy contract ID">{{template "copy_icon"}}</button>
           {{if .MissingSince}}<span class="badge missing" title="not found on the network since {{.MissingSince.UTC.Format "2006-01-02 15:04"}} UTC">missing</span>{{end}}
           {{if .Name}}<div class="name">{{.Name}}</div>{{end}}
           {{if .Matches}}<div class="matches">matches {{range $i, $m := .Matches}}{{if $i}}, {{end}}<code>{{$m}}</code>{{end}}</div>{{end}}
         </td>
         <td><span class="badge">{{.Network}}</span></td>
-        <td class="mono dim">{{short .CurrentWasmHash 16}}</td>
+        <td class="mono dim">
+          <span class="truncate" id="hash-{{.ContractID}}">{{.CurrentWasmHash}}</span>
+          <button class="copy" type="button" data-copy="#hash-{{.ContractID}}" aria-label="Copy WASM hash">{{template "copy_icon"}}</button>
+        </td>
         <td class="dim">{{.LastRefreshed.UTC.Format "2006-01-02 15:04"}} UTC</td>
       </tr>
     {{end}}

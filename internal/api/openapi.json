@@ -138,6 +138,24 @@
         }
       }
     },
+    "/api/wasm/{hash}/contracts": {
+      "get": {
+        "summary": "List every contract running a given WASM",
+        "description": "Many contracts share one WASM: every instance of a token template, every vault a factory deployed. This answers who else runs a given piece of code, which is the question a vulnerability in a shared WASM raises. With `ever=true` the listing also covers the contracts that ran the hash in the past and have since been upgraded; each result says whether the contract still runs it.",
+        "operationId": "listWasmContracts",
+        "parameters": [
+          { "$ref": "#/components/parameters/hash" },
+          { "$ref": "#/components/parameters/network" },
+          { "name": "ever", "in": "query", "description": "Also list the contracts that ran the hash in the past, not only the ones running it now.", "schema": { "type": "boolean", "default": false } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 200, "default": 50 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "minimum": 0, "default": 0 } }
+        ],
+        "responses": {
+          "200": { "description": "One page of contracts.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WasmContractList" }, "examples": { "shared": { "$ref": "#/components/examples/WasmContractList" } } } } },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
     "/api/contracts/{id}/functions/{fn}": {
       "get": {
         "summary": "One function in detail",
@@ -322,6 +340,22 @@
           "current": true
         }]
       } },
+      "WasmContractList": { "value": {
+        "wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+        "network": "testnet",
+        "ever": false,
+        "contracts": [{
+          "contract_id": "CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN",
+          "network": "testnet",
+          "current_wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+          "first_seen": "2026-08-07T12:00:00Z",
+          "last_refreshed": "2026-08-07T12:00:00Z",
+          "current": true
+        }],
+        "total": 1,
+        "limit": 50,
+        "offset": 0
+      } },
       "BatchRegisterResult": { "value": {
         "results": [
           {
@@ -450,6 +484,26 @@
           { "type": "object", "properties": { "created": { "type": "boolean" } }, "required": ["created"] }
         ]
       },
+      "WasmContractList": {
+        "type": "object",
+        "description": "The contracts that run a given WASM hash.",
+        "properties": {
+          "wasm_hash": { "$ref": "#/components/schemas/WasmHash" },
+          "network": { "type": "string" },
+          "ever": { "type": "boolean", "description": "True when the listing also covers the contracts that ran the hash in the past." },
+          "contracts": { "type": "array", "items": { "$ref": "#/components/schemas/WasmContract" } },
+          "total": { "type": "integer", "description": "Matches ignoring paging." },
+          "limit": { "type": "integer" },
+          "offset": { "type": "integer" }
+        },
+        "required": ["wasm_hash", "network", "ever", "contracts", "total", "limit", "offset"]
+      },
+      "WasmContract": {
+        "allOf": [
+          { "$ref": "#/components/schemas/Contract" },
+          { "type": "object", "properties": { "current": { "type": "boolean", "description": "True when the contract runs the hash now, false when it only ran it in the past." } }, "required": ["current"] }
+        ]
+      },
       "ContractInterface": {
         "type": "object",
         "properties": {
@@ -520,6 +574,7 @@
         "properties": {
           "abi_version": { "const": "1" },
           "meta": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Build metadata from contractmetav0 (rsver, rssdkver). Omitted when absent." },
+          "env_meta": { "$ref": "#/components/schemas/EnvMeta" },
           "functions": { "type": "array", "items": { "$ref": "#/components/schemas/Function" } },
           "types": {
             "type": "object",
@@ -534,6 +589,16 @@
           "events": { "type": "array", "items": { "$ref": "#/components/schemas/Event" } }
         },
         "required": ["abi_version", "functions", "types", "events"]
+      },
+      "EnvMeta": {
+        "type": "object",
+        "description": "The host environment the contract was built against, from contractenvmetav0. Omitted when the contract carries no such section.",
+        "properties": {
+          "interface_version": { "type": "string", "examples": ["25", "25.1"], "description": "The host interface version the contract targets, written the way a version number is." },
+          "protocol": { "type": "integer", "minimum": 0, "description": "The protocol version the contract was built against, and the lowest protocol it will run on." },
+          "pre_release": { "type": "integer", "minimum": 0, "description": "The pre-release number of the protocol version. Zero for a released protocol, and omitted then." }
+        },
+        "required": ["interface_version"]
       },
       "Function": {
         "type": "object",

@@ -293,6 +293,7 @@ func funcs() template.FuncMap {
 		"signatureParts": signatureParts,
 		"typeParts":      typeParts,
 		"typeID":         typeID,
+		"markdown":       renderMarkdown,
 		"pageURL": func(query, network string, page int) string {
 			values := url.Values{}
 			if query != "" {

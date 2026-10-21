@@ -4,6 +4,10 @@
     "rssdkver": "25.3.0#dcbea44513feb7734af6b6c4aced2c4a7a2715d0",
     "rsver": "1.93.0-nightly"
   },
+  "env_meta": {
+    "interface_version": "25",
+    "protocol": 25
+  },
   "functions": [
     {
       "name": "vote",

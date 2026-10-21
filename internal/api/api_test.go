@@ -204,6 +204,99 @@ func TestCatalogUploadedWasm(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrNotFound, "cataloguing code must not require or create a contract")
 }
 
+// TestListContractsByWasm answers the question a vulnerability in a shared
+// WASM raises: which other contracts run this code?
+func TestListContractsByWasm(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	module := moduleWith(t, "balance")
+	hash := stellartest.HashOf(module)
+
+	// Two instances of the same code: the shape a token template or a
+	// factory produces.
+	h.fake.Deploy(idA, module)
+	h.fake.Deploy(idB, module)
+
+	for _, id := range []string{idA, idB} {
+		resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+id+`"}`)
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+	}
+
+	resp, raw := h.do(t, http.MethodGet, "/api/wasm/"+hash+"/contracts", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	got := h.decode(t, raw)
+	assert.Equal(t, hash, got["wasm_hash"])
+	assert.Equal(t, "testnet", got["network"])
+	assert.Equal(t, float64(2), got["total"])
+	assert.False(t, got["ever"].(bool))
+
+	contracts := got["contracts"].([]any)
+	require.Len(t, contracts, 2)
+	for _, c := range contracts {
+		assert.True(t, c.(map[string]any)["current"].(bool),
+			"both contracts run this hash")
+	}
+}
+
+// TestListContractsByWasmEver covers the wider answer: the contracts that
+// ran the code in the past and have since been upgraded.
+func TestListContractsByWasmEver(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	module := moduleWith(t, "balance")
+	hash := stellartest.HashOf(module)
+
+	h.fake.Deploy(idA, module)
+	h.fake.Deploy(idB, module)
+
+	for _, id := range []string{idA, idB} {
+		resp, _ := h.do(t, http.MethodPost, "/api/contracts", `{"contract_id":"`+id+`"}`)
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+	}
+
+	// One of them is upgraded to different code.
+	h.fake.Upgrade(idA, moduleWith(t, "other"))
+	resp, _ := h.do(t, http.MethodPost, "/api/contracts/"+idA+"/refresh", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	resp, raw := h.do(t, http.MethodGet, "/api/wasm/"+hash+"/contracts", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+	assert.Equal(t, float64(1), h.decode(t, raw)["total"],
+		"only the contract that still runs the hash is listed")
+
+	resp, raw = h.do(t, http.MethodGet, "/api/wasm/"+hash+"/contracts?ever=true", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	got := h.decode(t, raw)
+	assert.True(t, got["ever"].(bool))
+	assert.Equal(t, float64(2), got["total"], "the upgraded contract ran the hash too")
+
+	contracts := got["contracts"].([]any)
+	require.Len(t, contracts, 2)
+	for _, c := range contracts {
+		entry := c.(map[string]any)
+		if entry["contract_id"] == idA {
+			assert.False(t, entry["current"].(bool),
+				"the upgraded contract no longer runs the hash")
+		} else {
+			assert.True(t, entry["current"].(bool))
+		}
+	}
+}
+
+func TestListContractsByWasmBadRequest(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	resp, raw := h.do(t, http.MethodGet, "/api/wasm/not-a-hash/contracts", "")
+	assert.Equal(t, http.StatusBadRequest, resp.StatusCode, string(raw))
+	assert.NotEmpty(t, h.decode(t, raw)["error"])
+}
+
 func TestUpdateContractSource(t *testing.T) {
 	t.Parallel()
 

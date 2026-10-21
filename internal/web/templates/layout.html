@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/app.css">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false}'>
 <script src="/static/htmx.min.js" defer></script>
+<script src="/static/copy.js"></script>
 </head>
 <body>
 <header class="topbar">
@@ -15,6 +16,10 @@
 </header>
 <main>
 {{end}}
+
+{{/* The icon on a copy button. It is decorative: the button carries the
+     accessible name. */}}
+{{define "copy_icon"}}<svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 3.5h-8v8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>{{end}}
 
 {{define "page_foot"}}
 </main>

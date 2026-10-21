@@ -298,6 +298,61 @@ func (m *Memory) ListContracts(ctx context.Context, f ListFilter) (*ContractPage
 	return page, nil
 }
 
+// ListContractsByWasm returns a paged listing of the contracts that run the
+// given WASM hash, and — with Ever set — of the ones that ran it in the
+// past.
+func (m *Memory) ListContractsByWasm(ctx context.Context, f WasmFilter) (*WasmContractPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.Normalize()
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	matched := make([]WasmContract, 0, len(m.contracts))
+	for k, c := range m.contracts {
+		if f.Network != "" && c.Network != f.Network {
+			continue
+		}
+		current := c.CurrentWasmHash == f.WasmHash
+		if !current {
+			if !f.Ever || !m.ranWasm(k, f.WasmHash) {
+				continue
+			}
+		}
+		c.MissingSince = copyMissing(c.MissingSince)
+		matched = append(matched, WasmContract{Contract: c, Current: current})
+	}
+
+	sort.Slice(matched, func(i, j int) bool {
+		if !matched[i].LastRefreshed.Equal(matched[j].LastRefreshed) {
+			return matched[i].LastRefreshed.After(matched[j].LastRefreshed)
+		}
+		return matched[i].ContractID < matched[j].ContractID
+	})
+
+	page := &WasmContractPage{Contracts: []WasmContract{}}
+	if f.Offset < len(matched) {
+		end := min(f.Offset+f.Limit, len(matched))
+		page.Contracts = append(page.Contracts, matched[f.Offset:end]...)
+	}
+	page.Total = len(matched)
+	return page, nil
+}
+
+// ranWasm reports whether a contract has a stored interface for the given
+// WASM hash, which is how the store knows it ran that code at some point.
+// The caller holds m.mu.
+func (m *Memory) ranWasm(k, wasmHash string) bool {
+	for _, s := range m.specs[k] {
+		if s.WasmHash == wasmHash {
+			return true
+		}
+	}
+	return false
+}
+
 // currentSymbols returns the joined symbol names of the spec a contract
 // currently runs. The caller holds m.mu.
 func (m *Memory) currentSymbols(k, wasmHash string) string {

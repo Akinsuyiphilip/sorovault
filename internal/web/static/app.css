@@ -214,15 +214,119 @@ table { width: 100%; border-collapse: collapse; }
 .doc {
   color: var(--dim);
   font-size: .875rem;
-  white-space: pre-wrap;
   margin: .4rem 0 .6rem;
-  max-height: 11rem;
+  max-height: 14rem;
   overflow-y: auto;
 }
+
+/* Documentation is written in Markdown, so it brings its own elements
+   along. */
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+
+.markdown p { margin: .5rem 0; }
+
+.markdown h1, .markdown h2, .markdown h3,
+.markdown h4, .markdown h5, .markdown h6 {
+  font-size: .92rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--ink);
+  margin: .8rem 0 .3rem;
+  border: 0;
+  padding: 0;
+}
+
+.markdown ul, .markdown ol { margin: .4rem 0; padding-left: 1.3rem; }
+.markdown li { margin: .15rem 0; }
+
+.markdown code {
+  font-family: var(--mono);
+  font-size: .9em;
+  background: var(--bg);
+  padding: .05rem .25rem;
+  border-radius: 3px;
+}
+
+.markdown pre {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .5rem .7rem;
+  margin: .5rem 0;
+  overflow-x: auto;
+}
+
+.markdown pre code { background: none; padding: 0; }
+
+.markdown blockquote {
+  margin: .5rem 0;
+  padding: .1rem 0 .1rem .7rem;
+  border-left: 3px solid var(--line);
+}
+
+.markdown table { font-size: .85rem; margin: .5rem 0; }
+.markdown th, .markdown td { padding: .2rem .6rem .2rem 0; text-align: left; }
+.markdown th { font-weight: 600; color: var(--ink); }
+
+.markdown a { word-break: break-word; }
 
 .returns { font-size: .85rem; color: var(--dim); margin: .5rem 0 0; }
 .returns code { color: var(--accent); font-family: var(--mono); }
 .jsonlink { float: right; font-size: .8rem; text-decoration: none; }
+
+/* Copy buttons */
+
+/* The buttons are hidden unless the script that handles them has marked
+   the document, so a page without JavaScript shows the values as plain,
+   selectable text. */
+.copy { display: none; }
+
+html.js .copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  padding: 0;
+  color: var(--dim);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+html.js .copy:hover { color: var(--ink); border-color: var(--accent); }
+html.js .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.title-row { display: flex; align-items: center; gap: .4rem; }
+.title-row h1 { margin-bottom: .35rem; }
+
+.signature-row { display: flex; align-items: baseline; gap: .4rem; }
+.signature-row h3 { margin-bottom: .4rem; }
+
+/* A hash is shown short but kept whole, so that it can be copied. */
+.truncate {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* Facts list */
 
