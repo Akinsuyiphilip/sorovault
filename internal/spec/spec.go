@@ -94,6 +94,12 @@ func (XDRDecoder) Decode(wasmModule []byte) (*model.Interface, error) {
 	}
 	iface.Meta = meta
 
+	envMeta, err := decodeEnvMeta(wasmModule)
+	if err != nil {
+		return nil, err
+	}
+	iface.EnvMeta = envMeta
+
 	return iface, nil
 }
 
@@ -453,4 +459,52 @@ func decodeMeta(wasmModule []byte) (map[string]string, error) {
 		return nil, nil
 	}
 	return meta, nil
+}
+
+// decodeEnvMeta reads the optional "contractenvmetav0" section, which
+// records the host environment the contract was built against.
+//
+// The section holds a stream of SCEnvMetaEntry values. The only kind there
+// is today is the interface version, which the host checks before it runs
+// the contract: a contract built for the same or an older protocol version
+// runs, and a contract with a different pre-release number does not.
+//
+// The interface version used to be one 64-bit number that packed the
+// protocol version into its high half and the pre-release number into its
+// low half; the XDR now spells the two out as separate 32-bit fields. The
+// bytes mean the same thing either way — XDR is big-endian, so the high
+// half comes first — and a section written by an older toolchain still
+// decodes.
+func decodeEnvMeta(wasmModule []byte) (*model.EnvMeta, error) {
+	section, err := wasm.CustomSection(wasmModule, wasm.SectionContractEnvMeta)
+	if err != nil {
+		if errors.Is(err, wasm.ErrSectionNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var out *model.EnvMeta
+	r := bytes.NewReader(section)
+	for r.Len() > 0 {
+		var entry xdr.ScEnvMetaEntry
+		if _, err := xdr.Unmarshal(r, &entry); err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			return nil, fmt.Errorf("spec: decoding env meta entry: %w", err)
+		}
+		if entry.Kind != xdr.ScEnvMetaKindScEnvMetaKindInterfaceVersion || entry.InterfaceVersion == nil {
+			// A kind this build predates. Skipping it keeps the rest of the
+			// metadata available.
+			continue
+		}
+		meta := model.NewEnvMeta(
+			uint32(entry.InterfaceVersion.Protocol),
+			uint32(entry.InterfaceVersion.PreRelease),
+		)
+		out = &meta
+	}
+
+	return out, nil
 }

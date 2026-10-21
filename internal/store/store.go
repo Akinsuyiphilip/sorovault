@@ -231,6 +231,26 @@ type ContractPage struct {
 	Total int `json:"total"`
 }
 
+// WasmFilter selects the contracts that run a given WASM hash.
+//
+// Many contracts share one WASM — every instance of a token template, every
+// vault a factory deployed — so the question "who else runs this code?" is
+// the one a vulnerability in a shared WASM raises.
+type WasmFilter struct {
+	// Network restricts results to one network. Empty means all networks.
+	Network string
+	// WasmHash is the hash of the WASM the contracts run.
+	WasmHash string
+	// Ever includes the contracts that ran the hash in the past, not only
+	// the ones running it now.
+	Ever bool
+	// Limit is the maximum number of rows to return. Zero means
+	// DefaultLimit; anything above MaxLimit is clamped to MaxLimit.
+	Limit int
+	// Offset is the number of rows to skip.
+	Offset int
+}
+
 // NetworkStats is one network's share of the registry.
 type NetworkStats struct {
 	Network   string `json:"network"`
@@ -277,6 +297,22 @@ type UpgradeFilter struct {
 }
 
 // Normalize trims the network and clamps the filter's paging to the
+// supported range, as ListFilter.Normalize does.
+func (f *WasmFilter) Normalize() {
+	f.Network = strings.TrimSpace(f.Network)
+	f.WasmHash = strings.TrimSpace(f.WasmHash)
+	if f.Limit <= 0 {
+		f.Limit = DefaultLimit
+	}
+	if f.Limit > MaxLimit {
+		f.Limit = MaxLimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+}
+
+// Normalize trims the network and clamps the filter's paging to the
 // supported range.
 func (f *UpgradeFilter) Normalize() {
 	f.Network = strings.TrimSpace(f.Network)
@@ -289,6 +325,24 @@ func (f *UpgradeFilter) Normalize() {
 	if f.Offset < 0 {
 		f.Offset = 0
 	}
+}
+
+// WasmContract is one contract in a listing of the contracts that run a
+// given WASM hash.
+type WasmContract struct {
+	Contract
+
+	// Current is true when the contract runs the hash now, and false when
+	// it only ran it in the past.
+	Current bool `json:"current"`
+}
+
+// WasmContractPage is one page of a listing of the contracts that run a
+// given WASM hash.
+type WasmContractPage struct {
+	Contracts []WasmContract `json:"contracts"`
+	// Total is how many contracts match, ignoring paging.
+	Total int `json:"total"`
 }
 
 // UpgradePage is one page of the upgrade feed.
@@ -335,6 +389,14 @@ type Store interface {
 
 	// ListContracts returns a filtered, paged listing.
 	ListContracts(ctx context.Context, f ListFilter) (*ContractPage, error)
+
+	// ListContractsByWasm returns a paged listing of the contracts that
+	// run the given WASM hash.
+	//
+	// With Ever set, the listing also covers the contracts that ran the
+	// hash in the past and have since been upgraded; each result says
+	// whether the contract still runs it.
+	ListContractsByWasm(ctx context.Context, f WasmFilter) (*WasmContractPage, error)
 
 	// ListNetworks returns the distinct networks represented in the registry,
 	// in ascending order.

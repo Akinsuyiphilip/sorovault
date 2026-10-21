@@ -293,7 +293,7 @@ func TestContractPage(t *testing.T) {
 
 	h := newHarness(t)
 	h.register(t, idA)
-	require.NoError(t, h.store.UpdateSource(context.Background(), "testnet", idA,
+	require.NoError(t, h.reg.Store().UpdateSource(context.Background(), "testnet", idA,
 		"https://github.com/soroworks/sorovault", "0123456789abcdef0123456789abcdef01234567"))
 
 	resp, body := h.get(t, "/contracts/"+idA)
@@ -338,6 +338,113 @@ func TestContractPageEscapesOutput(t *testing.T) {
 	// Rendered generic types must appear escaped, never as live tags.
 	assert.NotContains(t, body, "<BytesN<32>>")
 	assert.Contains(t, body, "&lt;")
+}
+
+// TestContractPageRendersDocsAsMarkdown proves the documentation is
+// rendered as Markdown, and that a doc cannot smuggle markup into the
+// page: docs come from an untrusted chain.
+func TestContractPageRendersDocsAsMarkdown(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	doc := "### Signals\n\n| idx | meaning |\n|-----|---------|\n| 0   | one     |\n\n" +
+		"* first\n* second\n\nCast a vote <script>alert(1)</script> now.\n"
+
+	iface := &model.Interface{
+		ABIVersion: model.ABIVersion,
+		Functions:  []model.Function{{Name: "vote", Doc: doc}},
+		Types: model.Types{
+			Structs: []model.Struct{}, Unions: []model.Union{},
+			Enums: []model.Enum{}, ErrorEnums: []model.ErrorEnum{},
+		},
+		Events: []model.Event{},
+	}
+	require.NoError(t, h.reg.Store().Save(context.Background(), store.Contract{
+		ContractID: idA, Network: "testnet", CurrentWasmHash: "hash-a",
+	}, iface))
+
+	resp, body := h.get(t, "/contracts/"+idA)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	assert.Contains(t, body, "<h3>Signals</h3>", "the heading in the doc should be rendered")
+	assert.Contains(t, body, "<table>", "the table in the doc should be rendered")
+	assert.Contains(t, body, "<li>first</li>", "the bullet list in the doc should be rendered")
+
+	// The script in the doc must not reach the page as markup.
+	assert.NotContains(t, body, "<script>alert",
+		"a script in a doc must never be rendered as a tag")
+
+	_, index := h.get(t, "/")
+	assert.Equal(t, strings.Count(index, "<script"), strings.Count(body, "<script"),
+		"the documentation must not add a script to the page")
+}
+
+// TestContractPageShowsProtocolVersion proves the contract page says which
+// protocol the contract was built against.
+func TestContractPageShowsProtocolVersion(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	_, body := h.get(t, "/contracts/"+idA)
+
+	// The fixture was built against protocol 25.
+	assert.Contains(t, body, "<dt>Protocol</dt>")
+	assert.Contains(t, body, `<dd class="mono">25</dd>`)
+}
+
+// TestContractPageLinksTheWasmHash proves the contract page offers the
+// list of the other contracts running the same code.
+func TestContractPageLinksTheWasmHash(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	const hash = "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781"
+
+	_, body := h.get(t, "/contracts/"+idA)
+	assert.Contains(t, body, "/api/wasm/"+hash+"/contracts",
+		"the WASM hash should link to the contracts that run it")
+}
+
+// TestContractPageHasCopyButtons proves the values people paste into other
+// tools can be copied.
+func TestContractPageHasCopyButtons(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.register(t, idA)
+
+	_, body := h.get(t, "/contracts/"+idA)
+
+	assert.Contains(t, body, `data-copy="#contract-id"`)
+	assert.Contains(t, body, `data-copy="#wasm-hash"`)
+	assert.Contains(t, body, `data-copy="#sig-vote"`,
+		"a function signature should be copyable")
+	assert.Contains(t, body, `aria-label="Copy contract ID"`,
+		"a button needs a name a screen reader can read out")
+
+	resp, script := h.get(t, "/static/copy.js")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, script, "navigator.clipboard")
+	assert.Contains(t, script, `aria-live`, "the copy has to be announced")
+}
+
+// TestCopyButtonsNeedJavaScript proves the buttons stay hidden without
+// JavaScript, so the values they copy remain plain, selectable text.
+func TestCopyButtonsNeedJavaScript(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	resp, css := h.get(t, "/static/app.css")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, css, ".copy { display: none; }",
+		"the buttons must be hidden until the script that handles them runs")
+	assert.Contains(t, css, "html.js .copy",
+		"the script marks the document, and that is what reveals the buttons")
 }
 
 // TestContractPageEscapesAnchorIDs proves a contract's own name cannot break

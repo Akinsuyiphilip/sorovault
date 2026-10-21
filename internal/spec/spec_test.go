@@ -3,6 +3,7 @@ package spec_test
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -50,6 +51,23 @@ func encodeMeta(t *testing.T, kv map[string]string) []byte {
 		buf.Write(raw)
 	}
 	return buf.Bytes()
+}
+
+// encodeEnvMeta encodes an interface-version entry the way a Soroban build
+// writes it into the "contractenvmetav0" section.
+func encodeEnvMeta(t *testing.T, protocol, preRelease uint32) []byte {
+	t.Helper()
+
+	entry := xdr.ScEnvMetaEntry{
+		Kind: xdr.ScEnvMetaKindScEnvMetaKindInterfaceVersion,
+		InterfaceVersion: &xdr.ScEnvMetaEntryInterfaceVersion{
+			Protocol:   xdr.Uint32(protocol),
+			PreRelease: xdr.Uint32(preRelease),
+		},
+	}
+	raw, err := entry.MarshalBinary()
+	require.NoError(t, err)
+	return raw
 }
 
 func functionEntry(name string, inputs []xdr.ScSpecFunctionInputV0, outputs []xdr.ScSpecTypeDef) xdr.ScSpecEntry {
@@ -354,6 +372,90 @@ func TestDecodeModuleWithoutMeta(t *testing.T) {
 	assert.Len(t, iface.Functions, 1)
 }
 
+// TestDecodeEnvMeta covers the section that records which host environment
+// a contract was built against.
+func TestDecodeEnvMeta(t *testing.T) {
+	t.Parallel()
+
+	section := encodeEntries(t, functionEntry("hello", nil, nil))
+
+	t.Run("the interface version is decoded", func(t *testing.T) {
+		t.Parallel()
+
+		module := wasmtest.Module(
+			wasmtest.Section{Name: wasm.SectionContractSpec, Body: section},
+			wasmtest.Section{Name: wasm.SectionContractEnvMeta, Body: encodeEnvMeta(t, 25, 0)},
+		)
+
+		iface, err := spec.XDRDecoder{}.Decode(module)
+		require.NoError(t, err)
+		require.NotNil(t, iface.EnvMeta)
+		assert.Equal(t, uint32(25), iface.EnvMeta.Protocol)
+		assert.Equal(t, uint32(0), iface.EnvMeta.PreRelease)
+		assert.Equal(t, "25", iface.EnvMeta.InterfaceVersion)
+	})
+
+	t.Run("a pre-release number is kept apart from the protocol", func(t *testing.T) {
+		t.Parallel()
+
+		module := wasmtest.Module(
+			wasmtest.Section{Name: wasm.SectionContractSpec, Body: section},
+			wasmtest.Section{Name: wasm.SectionContractEnvMeta, Body: encodeEnvMeta(t, 25, 3)},
+		)
+
+		iface, err := spec.XDRDecoder{}.Decode(module)
+		require.NoError(t, err)
+		require.NotNil(t, iface.EnvMeta)
+		assert.Equal(t, uint32(25), iface.EnvMeta.Protocol)
+		assert.Equal(t, uint32(3), iface.EnvMeta.PreRelease)
+		assert.Equal(t, "25.3", iface.EnvMeta.InterfaceVersion)
+	})
+
+	t.Run("a contract without the section has no environment metadata", func(t *testing.T) {
+		t.Parallel()
+
+		module := wasmtest.Module(wasmtest.Section{
+			Name: wasm.SectionContractSpec,
+			Body: section,
+		})
+
+		iface, err := spec.XDRDecoder{}.Decode(module)
+		require.NoError(t, err)
+		assert.Nil(t, iface.EnvMeta, "the section is optional, so its absence is not an error")
+	})
+}
+
+// TestDecodeEnvMetaOldPacking proves a section written before the XDR
+// split still decodes.
+//
+// The interface version used to be one 64-bit number that packed the
+// protocol version into its high half and the pre-release number into its
+// low half. XDR is big-endian, so the high half comes first, and the bytes
+// are the ones the two 32-bit fields use today.
+func TestDecodeEnvMetaOldPacking(t *testing.T) {
+	t.Parallel()
+
+	var body bytes.Buffer
+	// The union discriminant, then the packed interface version.
+	body.Write([]byte{0, 0, 0, 0})
+	for _, half := range []uint32{25, 3} {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], half)
+		body.Write(b[:])
+	}
+
+	module := wasmtest.Module(
+		wasmtest.Section{Name: wasm.SectionContractSpec, Body: encodeEntries(t, functionEntry("hello", nil, nil))},
+		wasmtest.Section{Name: wasm.SectionContractEnvMeta, Body: body.Bytes()},
+	)
+
+	iface, err := spec.XDRDecoder{}.Decode(module)
+	require.NoError(t, err)
+	require.NotNil(t, iface.EnvMeta)
+	assert.Equal(t, uint32(25), iface.EnvMeta.Protocol)
+	assert.Equal(t, uint32(3), iface.EnvMeta.PreRelease)
+}
+
 func TestDecodeModuleWithoutSpecSection(t *testing.T) {
 	t.Parallel()
 
@@ -418,6 +520,12 @@ func TestDecodeFixtureShape(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "25.3.0#dcbea44513feb7734af6b6c4aced2c4a7a2715d0", iface.Meta["rssdkver"])
+
+	// The fixture was built against protocol 25.
+	require.NotNil(t, iface.EnvMeta, "the real contract carries an environment metadata section")
+	assert.Equal(t, uint32(25), iface.EnvMeta.Protocol)
+	assert.Equal(t, uint32(0), iface.EnvMeta.PreRelease)
+	assert.Equal(t, "25", iface.EnvMeta.InterfaceVersion)
 
 	require.Len(t, iface.Functions, 7)
 	fn, ok := iface.Function("vote")

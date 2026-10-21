@@ -7,6 +7,7 @@
 package api
 
 import (
+	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -68,6 +69,7 @@ func (s *Server) Routes() chi.Router {
 	r.Post("/contracts:batch", s.batchRegisterContracts)
 	r.Get("/wasm/{hash}", s.getWasmSpec)
 	r.Post("/wasm/{hash}", s.catalogWasm)
+	r.Get("/wasm/{hash}/contracts", s.listWasmContracts)
 	r.Get("/contracts/{id}", s.getContract)
 	r.Put("/contracts/{id}/source", s.updateContractSource)
 	r.Post("/contracts/{id}/refresh", s.refreshContract)
@@ -85,14 +87,24 @@ func (s *Server) Routes() chi.Router {
 
 var commitHash = regexp.MustCompile(`^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$`)
 
+// parseWasmHash normalises a WASM hash from the URL.
+//
+// A hash is the SHA-256 of the module, so it is 32 bytes of hexadecimal;
+// the hex is lower-cased because that is how the registry stores it.
+func parseWasmHash(raw string) (string, error) {
+	rawHash, err := hex.DecodeString(strings.TrimSpace(raw))
+	if err != nil || len(rawHash) != sha256.Size {
+		return "", fmt.Errorf("%w: %q", registry.ErrInvalidWasmHash, raw)
+	}
+	return hex.EncodeToString(rawHash), nil
+}
+
 func (s *Server) getWasmSpec(w http.ResponseWriter, r *http.Request) {
-	wasmHash := strings.TrimSpace(chi.URLParam(r, "hash"))
-	rawHash, err := hex.DecodeString(wasmHash)
-	if err != nil || len(rawHash) != 32 {
+	wasmHash, err := parseWasmHash(chi.URLParam(r, "hash"))
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid wasm hash")
 		return
 	}
-	wasmHash = hex.EncodeToString(rawHash)
 	network, err := s.network(r)
 	if err != nil {
 		s.fail(w, r, err)
@@ -104,6 +116,53 @@ func (s *Server) getWasmSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, stored)
+}
+
+// listWasmContracts serves GET /api/wasm/{hash}/contracts.
+//
+// It answers "who else runs this code?", which is the question a
+// vulnerability in a shared WASM raises: every instance of a token
+// template, every vault a factory deployed. ?ever=true widens the answer
+// to the contracts that ran the code in the past and have since been
+// upgraded.
+func (s *Server) listWasmContracts(w http.ResponseWriter, r *http.Request) {
+	wasmHash, err := parseWasmHash(chi.URLParam(r, "hash"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid wasm hash")
+		return
+	}
+
+	network, err := s.network(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	q := r.URL.Query()
+	filter := store.WasmFilter{
+		Network:  network,
+		WasmHash: wasmHash,
+		Ever:     boolParam(q.Get("ever")),
+		Limit:    intParam(q.Get("limit"), 0),
+		Offset:   intParam(q.Get("offset"), 0),
+	}
+	filter.Normalize()
+
+	page, err := s.reg.Store().ListContractsByWasm(r.Context(), filter)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, wasmContractsResponse{
+		WasmHash:  wasmHash,
+		Network:   network,
+		Ever:      filter.Ever,
+		Contracts: page.Contracts,
+		Total:     page.Total,
+		Limit:     filter.Limit,
+		Offset:    filter.Offset,
+	})
 }
 
 func (s *Server) catalogWasm(w http.ResponseWriter, r *http.Request) {
@@ -648,6 +707,17 @@ func intParam(raw string, fallback int) int {
 	v, err := strconv.Atoi(raw)
 	if err != nil {
 		return fallback
+	}
+	return v
+}
+
+// boolParam parses a query parameter as a flag, treating anything
+// unparseable as false: the parameter only ever widens an answer, so a
+// malformed value must not widen it by accident.
+func boolParam(raw string) bool {
+	v, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return false
 	}
 	return v
 }

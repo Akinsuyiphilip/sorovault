@@ -48,6 +48,8 @@ a deployer (SoroForge) and a simulator (SoroProbe).
 - **Search** the registry by contract ID or name
 - **Serve** the decoded ABI as JSON: functions, arguments, return types, UDTs, events
 - **Version** interfaces — when a contract is upgraded, the prior interface is kept
+- **Find the contracts that share a WASM** — the question a vulnerability in a
+  shared piece of code raises
 - **Browse** it all in a small server-rendered UI, with a permalink for every
   function, type and event and a form that registers a contract while you browse
 
@@ -94,6 +96,10 @@ Worth writing down, because it is the part that is easy to get wrong:
    calling `xdr.Unmarshal` in a loop until the reader is drained.
 5. **Metadata.** The optional `contractmetav0` section holds `SCMetaEntry`
    key/value pairs (`rsver`, `rssdkver`). Its absence is not an error.
+6. **Environment metadata.** The optional `contractenvmetav0` section holds the
+   `SCEnvMetaEntry` that records which host interface the contract was built
+   against — effectively the minimum protocol it needs. Its absence is not an
+   error either.
 
 The SDK does not parse WASM custom sections, so `internal/wasm` implements the
 small amount of the binary format that step 3 needs.
@@ -281,6 +287,7 @@ the same **503**, with the `Retry-After` header, inline on the page.
 | `POST` | `/api/contracts:batch` | register up to 20 contracts in one request — `{"contract_ids": ["C…", "C…"]}` |
 | `POST` | `/api/wasm/{hash}` | catalog uploaded code before a contract runs it |
 | `GET` | `/api/wasm/{hash}` | read a catalogued uploaded-code interface — `?network=` |
+| `GET` | `/api/wasm/{hash}/contracts` | every contract running a given WASM — `?network=`, `?ever=`, `?limit=`, `?offset=` |
 | `GET` | `/api/contracts/{id}` | the decoded ABI — `?network=`, `?wasm_hash=` |
 | `PUT` | `/api/contracts/{id}/source` | attach a `source_url` and optional `source_commit` |
 | `GET` | `/api/contracts/{id}/functions/{fn}` | one function in detail |
@@ -381,6 +388,33 @@ the API's status codes. It is a plain HTML form that htmx upgrades, and the
 write is accepted only when the browser names this origin in `Origin` (or
 `Referer`): the UI has no session for a CSRF token to bind to, so a
 same-origin check is the control that actually protects the write.
+
+**Contracts that share a WASM.** Many contracts run the same code: every
+instance of a token template, every vault a factory deployed. That is the
+question a vulnerability in a shared WASM raises, and
+`GET /api/wasm/{hash}/contracts` answers it:
+
+```console
+GET /api/wasm/c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781/contracts
+```
+
+```json
+{
+  "wasm_hash": "c618dae264864ccf446a3c7db27da80c7c83e840131242cc2fe9cd32a2a20781",
+  "network": "testnet",
+  "ever": false,
+  "contracts": [
+    { "contract_id": "CDZZ…4PAN", "network": "testnet", "current_wasm_hash": "c618dae…", "current": true, … }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+`?ever=true` widens the answer to the contracts that ran the code in the past
+and have since been upgraded; each result says whether the contract still runs
+it. The contract page links its WASM hash to this listing.
 
 ## CLI
 
@@ -525,6 +559,17 @@ the selected WASM version:
 $ sorovault codegen CDZZ…4PAN --lang md -o CONTRACT.md
 ```
 
+The browse UI renders the same documentation as Markdown, because that is
+how contract authors write it — the testnet fixture's `vote` function has a
+table and a bullet list. The rendering is sanitised, since documentation
+comes from an untrusted chain: raw HTML in a doc never reaches the page, and
+every link is marked `rel="nofollow noopener"`.
+
+The browse UI also offers a copy button next to the values people paste into
+other tools — contract IDs, WASM hashes and function signatures. The buttons
+are revealed by a small script, so without JavaScript the values stay plain
+selectable text.
+
 ## Uploaded code and source links
 
 `POST /api/wasm/{hash}` catalogs uploaded code by its 64-character SHA-256
@@ -542,6 +587,7 @@ against. `abi_version` is bumped if it ever changes incompatibly.
 {
   "abi_version": "1",
   "meta": { "rsver": "1.93.0-nightly", "rssdkver": "25.3.0#dcbea445…" },
+  "env_meta": { "interface_version": "25", "protocol": 25 },
 
   "functions": [
     {
@@ -612,6 +658,19 @@ A few things worth relying on:
   struct whose fields are named `"0"`, `"1"`, … — flagged so consumers need not
   re-derive it.
 - `meta` is omitted entirely when a contract carries no metadata section.
+- `env_meta` is omitted entirely when a contract carries no environment
+  metadata section. It says which host interface the contract was built
+  against, which is the minimum protocol it needs: a host runs a contract
+  built for the same or an older protocol version. `interface_version` is
+  that version written as a version number; `protocol` and `pre_release` are
+  the two numbers it is made of. The section used to carry them as one
+  64-bit value — the protocol number in the high half, the pre-release
+  number in the low half — and the XDR now spells them out separately. The
+  bytes mean the same thing either way, so a section written by an older
+  toolchain still decodes.
+
+`abi_version` is **1**. The `env_meta` field was added without a bump,
+because adding an optional field is not a breaking change.
 
 ## How it fits together
 
@@ -627,7 +686,7 @@ internal/registry  register/refresh orchestration
 internal/refresher scheduled re-checks of registered contracts
 internal/codegen   Markdown documentation and typed client generation from a stored ABI
 internal/api       chi JSON handlers
-internal/web       html/template + htmx browse UI
+internal/web       html/template + htmx browse UI; goldmark + bluemonday for the docs
 ```
 
 Three seams are interfaces, and each one is the natural place to extend the

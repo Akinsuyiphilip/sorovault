@@ -468,6 +468,7 @@ func funcs() template.FuncMap {
 		"signatureParts": signatureParts,
 		"typeParts":      typeParts,
 		"typeID":         typeID,
+		"markdown":       renderMarkdown,
 		"anchor":         anchor,
 		"anchorID":       anchorID,
 		"pageURL": func(query, network string, page int) string {

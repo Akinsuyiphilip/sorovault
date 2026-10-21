@@ -7,7 +7,10 @@
 // them cheaply.
 package model
 
-import "sort"
+import (
+	"sort"
+	"strconv"
+)
 
 // ABIVersion is the schema version of the JSON emitted by this package.
 // It is bumped when a change would break existing consumers.
@@ -23,9 +26,54 @@ type Interface struct {
 	// when the contract carries no metadata section.
 	Meta map[string]string `json:"meta,omitempty"`
 
+	// EnvMeta holds the contract environment metadata, decoded from the
+	// WASM's "contractenvmetav0" custom section: the host environment the
+	// contract was built against. It is nil when the contract carries no
+	// such section.
+	EnvMeta *EnvMeta `json:"env_meta,omitempty"`
+
 	Functions []Function `json:"functions"`
 	Types     Types      `json:"types"`
 	Events    []Event    `json:"events"`
+}
+
+// EnvMeta is the contract environment metadata: the version of the host
+// environment a contract was built against.
+//
+// The host checks a contract's interface version before it runs the
+// contract, so this says which protocol the contract needs: it runs on the
+// protocol it was built for and on any later one.
+type EnvMeta struct {
+	// InterfaceVersion is the version of the host interface the contract
+	// targets, written the way a version number is: the protocol version
+	// on its own for a release ("25"), and with the pre-release number
+	// after a dot for anything else ("25.1").
+	//
+	// The section carries the interface version as two numbers rather than
+	// as this string; see Protocol and PreRelease for the split. Build
+	// the value with NewEnvMeta, so the two cannot disagree.
+	InterfaceVersion string `json:"interface_version"`
+
+	// Protocol is the protocol version the contract was built against,
+	// which is the lowest protocol it will run on: a host runs a contract
+	// built for the same or an older protocol version.
+	Protocol uint32 `json:"protocol,omitempty"`
+
+	// PreRelease is the pre-release number of the protocol version. It is
+	// zero for a released protocol, and any two different pre-release
+	// numbers are incompatible, so a contract has to be recompiled.
+	PreRelease uint32 `json:"pre_release,omitempty"`
+}
+
+// NewEnvMeta builds the environment metadata for a protocol version and a
+// pre-release number, filling in the interface version that goes with them.
+func NewEnvMeta(protocol, preRelease uint32) EnvMeta {
+	meta := EnvMeta{Protocol: protocol, PreRelease: preRelease}
+	meta.InterfaceVersion = strconv.FormatUint(uint64(protocol), 10)
+	if preRelease != 0 {
+		meta.InterfaceVersion += "." + strconv.FormatUint(uint64(preRelease), 10)
+	}
+	return meta
 }
 
 // Function is a single callable contract entry point.
