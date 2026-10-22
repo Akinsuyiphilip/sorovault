@@ -197,6 +197,11 @@ const (
 // straight from user input do not have to.
 func (f *ListFilter) Normalize() {
 	f.Query = strings.TrimSpace(f.Query)
+	// PostgreSQL text parameters cannot contain NUL or invalid UTF-8. Replace
+	// either with the Unicode replacement character so both stores search the
+	// same normalized query without rejecting arbitrary input.
+	f.Query = strings.ToValidUTF8(f.Query, "\uFFFD")
+	f.Query = strings.ReplaceAll(f.Query, "\x00", "\uFFFD")
 	f.Functions = cleanNames(f.Functions)
 	f.Types = cleanNames(f.Types)
 	if f.Limit <= 0 {
