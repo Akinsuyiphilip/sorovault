@@ -62,9 +62,10 @@ tidy: ## Tidy go.mod and go.sum
 	go mod tidy
 
 .PHONY: golden
-golden: ## Regenerate the golden ABI fixture and the TypeScript client built from it
+golden: ## Regenerate the golden ABI fixture, the TypeScript client built from it and the JSON schemas
 	go test ./internal/spec -run TestDecodeFixture -update
 	go test ./internal/codegen -run TestGoldenZKVote -update
+	go test ./internal/codegen -run TestGoldenZKVoteSchemas -update
 
 .PHONY: up
 up: ## Start Postgres, run migrations and serve, via docker compose

@@ -235,6 +235,12 @@ table { width: 100%; border-collapse: collapse; }
 .anchor:hover,
 .anchor:focus-visible { color: var(--accent); }
 
+.badge:hover,
+.badge:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
 .doc {
   color: var(--dim);
   font-size: .875rem;

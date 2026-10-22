@@ -1,0 +1,46 @@
+{
+  "$id": "urn:sorovault:contract:CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN:testnet:abc123:vote",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Cast a vote using a ZK Firma Digital Groth16 proof.\n\nThe proof is verified by a cross-contract call to the `zk_verifier`\ncontract.  Double-voting is prevented via the nullifier stored in\npersistent storage.\n\n### Public signals layout (5 × 32-byte big-endian scalars)\n\n\n| idx | meaning                                                       |\n|-----|---------------------------------------------------------------|\n| 0   | `pubkeyHash`     — Poseidon hash of the signing RSA pubkey    |\n| 1   | `nullifier`      — unique per voter; prevents double-voting   |\n| 2   | `ageAbove18`     — reveal flag (0 or 1); not checked here     |\n| 3   | `nullifierSeed`  — must equal `vote_params.vote_scope`        |\n| 4   | `signalHash`     — binding commitment (see identity_gate)     |\n\n* `voter`          – account casting the vote (must authorise the tx)\n* `proposal_index` – 0-based index into the proposals list\n* `pub_signals`    – 5 public circuit outputs (see table above)\n* `a`              – Groth16 proof poi",
+  "properties": {
+    "a": {
+      "pattern": "^[0-9a-fA-F]{128}$",
+      "type": "string"
+    },
+    "b": {
+      "pattern": "^[0-9a-fA-F]{256}$",
+      "type": "string"
+    },
+    "c": {
+      "pattern": "^[0-9a-fA-F]{128}$",
+      "type": "string"
+    },
+    "proposal_index": {
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pub_signals": {
+      "items": {
+        "pattern": "^[0-9a-fA-F]{64}$",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "voter": {
+      "pattern": "^(?:C|G)[A-Z2-7]{55}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "voter",
+    "proposal_index",
+    "pub_signals",
+    "a",
+    "b",
+    "c"
+  ],
+  "title": "vote arguments",
+  "type": "object"
+}

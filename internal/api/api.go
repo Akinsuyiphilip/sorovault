@@ -76,6 +76,7 @@ func (s *Server) Routes() chi.Router {
 	r.Get("/contracts/{id}/versions", s.listVersions)
 	r.Get("/contracts/{id}/functions", s.listFunctions)
 	r.Get("/contracts/{id}/functions/{fn}", s.getFunction)
+	r.Get("/contracts/{id}/functions/{fn}/schema.json", s.getFunctionSchema)
 	r.Get("/contracts/{id}/client.ts", s.getTypeScriptClient)
 	r.Get("/stats", s.getStats)
 	r.Get("/upgrades", s.listUpgrades)
@@ -446,6 +447,52 @@ func (s *Server) getFunction(w http.ResponseWriter, r *http.Request) {
 		Signature:  fn.Signature(),
 		Function:   fn,
 	})
+}
+
+// getFunctionSchema serves GET /api/contracts/{id}/functions/{fn}/schema.json:
+// a JSON Schema (2020-12) for the function's arguments.
+//
+// A wallet or a dApp renders a form from the schema and validates what
+// the user typed before encoding it, so the schema has to say what each
+// argument may be. It is derived from the same stored interface the rest
+// of the API serves, and follows the same type conventions as the typed
+// client.
+func (s *Server) getFunctionSchema(w http.ResponseWriter, r *http.Request) {
+	contractID := chi.URLParam(r, "id")
+	fnName := chi.URLParam(r, "fn")
+
+	network, err := s.network(r)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	wasmHash := strings.TrimSpace(r.URL.Query().Get("wasm_hash"))
+	stored, err := s.reg.Store().GetSpec(r.Context(), network, contractID, wasmHash)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	fn, ok := stored.Interface.Function(fnName)
+	if !ok {
+		writeError(w, http.StatusNotFound,
+			"no function "+strconv.Quote(fnName)+" in contract "+contractID)
+		return
+	}
+
+	schema, err := codegen.JSONSchema(stored.Interface, fn, codegen.Source{
+		ContractID: stored.ContractID,
+		Network:    stored.Network,
+		WasmHash:   stored.WasmHash,
+	})
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/schema+json")
+	_, _ = w.Write(schema)
 }
 
 // listFunctions serves GET /api/contracts/{id}/functions.

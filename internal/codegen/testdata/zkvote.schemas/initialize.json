@@ -1,0 +1,80 @@
+{
+  "$defs": {
+    "VoteParams": {
+      "additionalProperties": false,
+      "properties": {
+        "birth_date_lowerbound": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "citizenship_whitelist": {
+          "items": {
+            "pattern": "^[0-9]+$",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "expiration_date_lower_bound": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "identity_counter_upper_bound": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "identity_ts_upper_bound": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "vote_scope": {
+          "pattern": "^[0-9]+$",
+          "type": "string"
+        },
+        "voting_question": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "birth_date_lowerbound",
+        "citizenship_whitelist",
+        "expiration_date_lower_bound",
+        "identity_counter_upper_bound",
+        "identity_ts_upper_bound",
+        "vote_scope",
+        "voting_question"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:sorovault:contract:CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN:testnet:abc123:initialize",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One-time initialization.  Must be called before any votes can be cast.\n\n* `admin`                 – address that deployed this contract\n* `verifier_id`           – address of the deployed `zk_verifier` contract\n* `vote_params`           – campaign configuration\n* `proposal_descriptions` – human-readable label for each option",
+  "properties": {
+    "admin": {
+      "pattern": "^(?:C|G)[A-Z2-7]{55}$",
+      "type": "string"
+    },
+    "proposal_descriptions": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "verifier_id": {
+      "pattern": "^(?:C|G)[A-Z2-7]{55}$",
+      "type": "string"
+    },
+    "vote_params": {
+      "$ref": "#/$defs/VoteParams"
+    }
+  },
+  "required": [
+    "admin",
+    "verifier_id",
+    "vote_params",
+    "proposal_descriptions"
+  ],
+  "title": "initialize arguments",
+  "type": "object"
+}
