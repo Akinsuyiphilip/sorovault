@@ -131,9 +131,10 @@ func TestPackageRejectsInvalidInput(t *testing.T) {
 	_, err = codegen.Package(&model.Interface{}, src, codegen.PackageOptions{Name: "ok", Version: "v1"})
 	assert.ErrorContains(t, err, "not a valid semantic version")
 
-	_, err = codegen.Package(&model.Interface{Functions: []model.Function{{Name: "not-valid"}}}, src,
+	files, err := codegen.Package(&model.Interface{Functions: []model.Function{{Name: "not-valid"}}}, src,
 		codegen.PackageOptions{Name: "ok"})
-	assert.ErrorContains(t, err, "not a valid identifier", "a client error must stop the package")
+	require.NoError(t, err)
+	assert.Contains(t, string(generatedFile(t, files, "src/index.ts")), `  "not-valid"(options?: sdk.MethodOptions):`)
 }
 
 func TestPackagePathsAreRelative(t *testing.T) {
