@@ -1,0 +1,9 @@
+{
+  "$id": "urn:sorovault:contract:CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN:testnet:abc123:get_proposal_count",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of get_proposal_count on contract CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN (testnet).",
+  "properties": {},
+  "title": "get_proposal_count arguments",
+  "type": "object"
+}

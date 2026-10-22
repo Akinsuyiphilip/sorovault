@@ -1,0 +1,17 @@
+{
+  "$id": "urn:sorovault:contract:CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN:testnet:abc123:has_voted",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Arguments of has_voted on contract CDZZXVGUCLBUTE3WDD6TF2NXPTBPOYTVPPBBIZMSPVIQLUG226XJ4PAN (testnet).",
+  "properties": {
+    "nullifier": {
+      "pattern": "^[0-9a-fA-F]{64}$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "nullifier"
+  ],
+  "title": "has_voted arguments",
+  "type": "object"
+}

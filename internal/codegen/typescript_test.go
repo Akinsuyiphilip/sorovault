@@ -15,7 +15,7 @@ import (
 	"github.com/soroworks/sorovault/internal/model"
 )
 
-var update = flag.Bool("update", false, "rewrite the golden TypeScript client")
+var update = flag.Bool("update", false, "rewrite the golden files")
 
 func ptr(t model.Type) *model.Type { return &t }
 
